@@ -1,15 +1,43 @@
 import type { MatchUpdate, SeasonAccuracyResponse } from "@/components/api/types"
 
-function normalizeApiBaseUrl(raw: string | undefined) {
-  const base = String(raw ?? "http://localhost:8000").trim()
+function normalizeApiBaseUrl(raw: string | undefined | null) {
+  const base = String(raw ?? "").trim()
+  if (!base) return ""
   return base.endsWith("/") ? base.slice(0, -1) : base
 }
 
-const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL)
+function readRuntimeApiBaseUrl(): string | null {
+  if (typeof window === "undefined") return null
+  try {
+    const url = new URL(window.location.href)
+    const qp = url.searchParams.get("api") ?? url.searchParams.get("api_base_url")
+    if (qp) {
+      const v = qp.trim()
+      if (/^https?:\/\//i.test(v)) {
+        window.localStorage.setItem("api_base_url", v)
+        return v
+      }
+    }
+  } catch {}
+
+  try {
+    const v = window.localStorage.getItem("api_base_url")
+    if (v && /^https?:\/\//i.test(v.trim())) return v.trim()
+  } catch {}
+
+  return null
+}
+
+export function getApiBaseUrl() {
+  const runtime = readRuntimeApiBaseUrl()
+  if (runtime) return normalizeApiBaseUrl(runtime)
+  const env = process.env.NEXT_PUBLIC_API_BASE_URL
+  return normalizeApiBaseUrl(env) || "http://localhost:8000"
+}
 
 export function apiUrl(path: string) {
   const p = path.startsWith("/") ? path : `/${path}`
-  return `${API_BASE_URL}${p}`
+  return `${getApiBaseUrl()}${p}`
 }
 
 export async function fetchSeasonProgress(championship: string = "all"): Promise<SeasonAccuracyResponse> {

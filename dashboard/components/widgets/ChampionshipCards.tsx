@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 
-import { apiUrl } from "@/components/api/client"
+import { apiUrl, getApiBaseUrl } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
 
 type OverviewMatch = {
@@ -138,12 +138,16 @@ export function ChampionshipCards() {
     return (
       <Card>
         <div className="text-sm font-semibold tracking-tight">Errore caricamento overview</div>
+        <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">API: {getApiBaseUrl()}</div>
         <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{error}</div>
         {status?.real_data_only ? (
           <div className="mt-4 rounded-2xl border border-amber-200/70 bg-amber-50/70 p-3 text-xs text-amber-900 backdrop-blur-md dark:border-amber-900/40 dark:bg-amber-950/35 dark:text-amber-100">
             Modalità dati reali attiva: se vedi 503, manca la sorgente dati oppure la chiave provider.
           </div>
         ) : null}
+        <div className="mt-4 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
+          Su Vercel puoi impostare la base API anche senza rebuild aprendo il sito con <span className="font-mono">?api=https://TUO-TUNNEL</span>.
+        </div>
       </Card>
     )
   }

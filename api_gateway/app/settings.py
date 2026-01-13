@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Forecast Master System API"
     cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+    cors_allow_origin_regex: str | None = None
     simulate_live_updates: bool = True
     live_tick_seconds: int = 30
     real_data_only: bool = False

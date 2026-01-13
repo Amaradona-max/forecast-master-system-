@@ -10,7 +10,7 @@ import {
   YAxis
 } from "recharts"
 
-import { apiUrl, fetchSeasonProgress } from "@/components/api/client"
+import { apiUrl, fetchSeasonProgress, getApiBaseUrl } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
 
 type OverviewMatch = {
@@ -274,7 +274,11 @@ export function StatisticalPredictionsDashboard() {
     return (
       <Card>
         <div className="text-sm font-semibold tracking-tight">Dashboard</div>
+        <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">API: {getApiBaseUrl()}</div>
         <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{error}</div>
+        <div className="mt-4 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
+          Se sei su Vercel e l’API punta a localhost, apri il sito con <span className="font-mono">?api=https://TUO-TUNNEL</span> per salvarlo.
+        </div>
       </Card>
     )
   }
