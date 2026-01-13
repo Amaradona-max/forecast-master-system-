@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from api_gateway.app.schemas import (
+    ChampionshipsOverviewResponse,
+    ChampionshipOverview,
+    MatchdayBlock,
+    OverviewMatch,
+)
+from api_gateway.app.settings import settings
+from ml_engine.performance_targets import CHAMPIONSHIP_TARGETS
+
+
+router = APIRouter()
+
+class SystemStatusResponse(BaseModel):
+    data_provider: str
+    real_data_only: bool
+    data_error: str | None = None
+    matches_loaded: int
+    now_utc: datetime
+
+
+@router.get("/api/v1/system/status", response_model=SystemStatusResponse)
+async def system_status(request: Request) -> SystemStatusResponse:
+    state = request.app.state.app_state
+    matches = await state.list_matches()
+    return SystemStatusResponse(
+        data_provider=settings.data_provider,
+        real_data_only=settings.real_data_only,
+        data_error=getattr(request.app.state, "data_error", None),
+        matches_loaded=len(matches),
+        now_utc=datetime.now(timezone.utc),
+    )
+
+
+@router.get("/api/v1/overview/championships", response_model=ChampionshipsOverviewResponse)
+async def championships_overview(request: Request) -> ChampionshipsOverviewResponse:
+    state = request.app.state.app_state
+    matches = await state.list_matches()
+    now_unix = datetime.now(timezone.utc).timestamp()
+    if settings.real_data_only and getattr(request.app.state, "data_error", None):
+        raise HTTPException(status_code=503, detail=str(request.app.state.data_error))
+    if settings.real_data_only and not matches:
+        raise HTTPException(status_code=503, detail="real_data_not_loaded")
+
+    by_champ: dict[str, list] = {}
+    for m in matches:
+        by_champ.setdefault(m.championship, []).append(m)
+
+    payload: list[ChampionshipOverview] = []
+    for champ in ["serie_a", "premier_league", "la_liga", "bundesliga", "eliteserien"]:
+        rows = by_champ.get(champ, [])
+        mapped: list[OverviewMatch] = []
+        for m in rows:
+            probs0 = dict(m.probabilities or {})
+            probs: dict[str, float] = {}
+            for k in ("home_win", "draw", "away_win"):
+                try:
+                    v = float(probs0.get(k, 0.0) or 0.0)
+                except Exception:
+                    v = 0.0
+                probs[k] = max(v, 0.0)
+            s = probs["home_win"] + probs["draw"] + probs["away_win"]
+            if s <= 0:
+                probs = {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
+            else:
+                probs = {k: v / s for k, v in probs.items()}
+            conf = max(probs.values())
+            explain = {}
+            source = {}
+            final_score = None
+            if isinstance(m.meta, dict):
+                x = m.meta.get("explain")
+                if isinstance(x, dict):
+                    explain = x
+                ctx = m.meta.get("context")
+                if isinstance(ctx, dict):
+                    s = ctx.get("source")
+                    if isinstance(s, dict):
+                        source = s
+                    fs = ctx.get("final_score")
+                    if isinstance(fs, dict):
+                        hg = fs.get("home")
+                        ag = fs.get("away")
+                        if isinstance(hg, int) and isinstance(ag, int):
+                            final_score = {"home": int(hg), "away": int(ag)}
+
+            kickoff_unix = m.kickoff_unix
+            kickoff_dt = None
+            if kickoff_unix is not None:
+                try:
+                    kickoff_dt = datetime.fromtimestamp(float(kickoff_unix), tz=timezone.utc)
+                except Exception:
+                    kickoff_dt = None
+
+            in_2026 = (kickoff_dt is not None) and (kickoff_dt.year == 2026) if settings.real_data_only else (kickoff_dt is None) or (kickoff_dt.year == 2026)
+            if not in_2026:
+                continue
+
+            mapped.append(
+                OverviewMatch(
+                    match_id=m.match_id,
+                    championship=champ,
+                    home_team=m.home_team,
+                    away_team=m.away_team,
+                    status=m.status,
+                    matchday=m.matchday,
+                    kickoff_unix=kickoff_unix,
+                    updated_at_unix=m.updated_at_unix,
+                    probabilities=probs,
+                    confidence=conf,
+                    explain=explain,
+                    source=source,
+                    final_score=final_score,
+                )
+            )
+
+        target = CHAMPIONSHIP_TARGETS.get(champ, {})
+        title = {
+            "serie_a": "Serie A",
+            "premier_league": "Premier League",
+            "la_liga": "La Liga",
+            "bundesliga": "Bundesliga",
+            "eliteserien": "Eliteserien",
+        }.get(champ, champ)
+
+        by_md: dict[int | None, list[OverviewMatch]] = {}
+        for m in mapped:
+            by_md.setdefault(m.matchday, []).append(m)
+
+        matchdays: list[MatchdayBlock] = []
+        for md, ms in sorted(by_md.items(), key=lambda it: (it[0] is None, it[0] or 0)):
+            label = f"Giornata {md}" if md is not None else "Giornata"
+            ms.sort(key=lambda x: (x.kickoff_unix or 0.0, x.match_id))
+            matchdays.append(MatchdayBlock(matchday_number=md, matchday_label=label, matches=ms))
+
+        matchdays_future = [
+            md
+            for md in matchdays
+            if any((m.status != "FINISHED") and ((m.kickoff_unix is None) or (m.kickoff_unix >= now_unix)) for m in md.matches)
+        ]
+        active_md = matchdays_future[0] if matchdays_future else (matchdays[0] if matchdays else None)
+
+        active_matches = list(active_md.matches) if active_md is not None else []
+        active_to_play = [m for m in active_matches if m.status != "FINISHED"]
+        top = sorted(active_to_play, key=lambda x: x.confidence, reverse=True)[:5]
+        to_play = [m for m in top if m.confidence >= 0.7]
+        finished = [m for m in mapped if m.status == "FINISHED"]
+
+        payload.append(
+            ChampionshipOverview(
+                championship=champ,
+                title=title,
+                accuracy_target=target.get("accuracy_target"),
+                key_features=list(target.get("key_features", [])),
+                matchdays=matchdays_future,
+                top_matches=top,
+                to_play_ge_70=to_play,
+                finished=finished,
+            )
+        )
+
+    return ChampionshipsOverviewResponse(generated_at_utc=datetime.now(timezone.utc), championships=payload)
