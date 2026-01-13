@@ -1,9 +1,15 @@
 import type { MatchUpdate, SeasonAccuracyResponse } from "@/components/api/types"
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+function normalizeApiBaseUrl(raw: string | undefined) {
+  const base = String(raw ?? "http://localhost:8000").trim()
+  return base.endsWith("/") ? base.slice(0, -1) : base
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL)
 
 export function apiUrl(path: string) {
-  return `${API_BASE_URL}${path}`
+  const p = path.startsWith("/") ? path : `/${path}`
+  return `${API_BASE_URL}${p}`
 }
 
 export async function fetchSeasonProgress(championship: string = "all"): Promise<SeasonAccuracyResponse> {
@@ -19,4 +25,3 @@ export async function fetchLiveProbabilities(matchId: string): Promise<MatchUpda
   if (!res.ok) throw new Error(`live_probabilities_failed:${res.status}`)
   return res.json()
 }
-

@@ -1,11 +1,15 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FORECAST_", env_file=".env", extra="ignore")
 
     app_name: str = "Forecast Master System API"
-    cors_allow_origins: list[str] = ["http://localhost:3000"]
+    cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
     simulate_live_updates: bool = True
     live_tick_seconds: int = 30
     real_data_only: bool = False
@@ -33,6 +37,29 @@ class Settings(BaseSettings):
     historical_end_season: int = 2025
     local_data_dir: str = ".."
     local_calendar_filename: str = "Calendari_Calcio_2025_2026.xlsx"
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _parse_cors_allow_origins(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return []
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+                if isinstance(parsed, str):
+                    s = parsed.strip()
+            except Exception:
+                pass
+            parts = [p.strip() for p in s.split(",")]
+            return [p for p in parts if p]
+        return v
 
 
 settings = Settings()

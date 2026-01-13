@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-01-13T17:34:07.312986+00:00",
+  "generated_at_utc": "2026-01-13T21:22:39.986409+00:00",
   "asof_utc": "2026-01-01T00:00:00+00:00",
   "championships": {
     "serie_a": {
@@ -664,7 +664,7 @@
   },
   "meta": {
     "model": "elo_strength_v1",
-    "source": "api_football"
+    "source": "local_files"
   },
-  "generated_at_unix": 1768325647.312993
+  "generated_at_unix": 1768339359.986419
 }

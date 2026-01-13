@@ -177,6 +177,7 @@ def build_ratings_payload(
     *,
     championship_matches: dict[str, list[HistoricalMatch]],
     asof_unix: float,
+    source: str,
 ) -> dict[str, Any]:
     champs: dict[str, Any] = {}
     for champ, matches in championship_matches.items():
@@ -185,7 +186,6 @@ def build_ratings_payload(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "asof_utc": datetime.fromtimestamp(asof_unix, tz=timezone.utc).isoformat(),
         "championships": champs,
-        "meta": {"model": "elo_strength_v1", "source": "api_football"},
+        "meta": {"model": "elo_strength_v1", "source": str(source)},
         "generated_at_unix": time.time(),
     }
-

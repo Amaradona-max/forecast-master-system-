@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -144,11 +145,10 @@ def load_calendar_fixtures(
         kickoff_dt = datetime(d.year, d.month, d.day, kickoff_t.hour, kickoff_t.minute, tzinfo=timezone.utc)
         status = "PREMATCH"
         final_score = None
-        if d < today:
-            score = _parse_score(res)
-            if score is not None:
-                status = "FINISHED"
-                final_score = score
+        score = _parse_score(res)
+        if score is not None and d <= today:
+            status = "FINISHED"
+            final_score = score
 
         out.append(
             LocalFixture(
@@ -271,13 +271,18 @@ def _parse_matchday(s: str) -> int | None:
 
 
 def _parse_score(s: str) -> dict[str, int] | None:
-    parts = str(s or "").strip().split(":")
-    if len(parts) != 2:
+    raw = str(s or "").strip()
+    if not raw:
         return None
-    a, b = parts[0].strip(), parts[1].strip()
+    m = re.search(r"(\d{1,2})\s*[:\-–—]\s*(\d{1,2})", raw)
+    if not m:
+        return None
+    a, b = m.group(1), m.group(2)
     if not a.isdigit() or not b.isdigit():
         return None
     ha, aa = int(a), int(b)
+    if 0 <= ha <= 23 and aa in {0, 15, 30, 45} and len(b) == 2:
+        return None
     if ha < 0 or aa < 0 or ha > 20 or aa > 20:
         return None
     return {"home": ha, "away": aa}

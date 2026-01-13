@@ -43,6 +43,7 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
     state = request.app.state.app_state
     matches = await state.list_matches()
     now_unix = datetime.now(timezone.utc).timestamp()
+    predictions_start_unix = datetime(2026, 1, 14, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
     if settings.real_data_only and getattr(request.app.state, "data_error", None):
         raise HTTPException(status_code=503, detail=str(request.app.state.data_error))
     if settings.real_data_only and not matches:
@@ -98,8 +99,10 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
                 except Exception:
                     kickoff_dt = None
 
-            in_2026 = (kickoff_dt is not None) and (kickoff_dt.year == 2026) if settings.real_data_only else (kickoff_dt is None) or (kickoff_dt.year == 2026)
-            if not in_2026:
+            in_scope = True
+            if settings.real_data_only:
+                in_scope = (kickoff_dt is not None) and (kickoff_dt.year in {2025, 2026})
+            if not in_scope:
                 continue
 
             mapped.append(
@@ -139,11 +142,15 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
             ms.sort(key=lambda x: (x.kickoff_unix or 0.0, x.match_id))
             matchdays.append(MatchdayBlock(matchday_number=md, matchday_label=label, matches=ms))
 
-        matchdays_future = [
-            md
-            for md in matchdays
-            if any((m.status != "FINISHED") and ((m.kickoff_unix is None) or (m.kickoff_unix >= now_unix)) for m in md.matches)
-        ]
+        matchdays_future: list[MatchdayBlock] = []
+        for md in matchdays:
+            ms_future = [
+                m
+                for m in md.matches
+                if (m.status != "FINISHED") and (m.kickoff_unix is not None) and (m.kickoff_unix >= max(now_unix, predictions_start_unix))
+            ]
+            if ms_future:
+                matchdays_future.append(MatchdayBlock(matchday_number=md.matchday_number, matchday_label=md.matchday_label, matches=ms_future))
         active_md = matchdays_future[0] if matchdays_future else (matchdays[0] if matchdays else None)
 
         active_matches = list(active_md.matches) if active_md is not None else []

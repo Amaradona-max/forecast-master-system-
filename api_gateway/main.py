@@ -395,6 +395,15 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
     if settings.real_data_only and not os.path.exists(settings.ratings_path):
         app.state.data_error = "ratings_missing"
         return
+    if settings.real_data_only:
+        try:
+            rp = Path(settings.ratings_path)
+            src = json.loads(rp.read_text(encoding="utf-8")).get("meta", {}).get("source")
+        except Exception:
+            src = None
+        if src != "local_files":
+            app.state.data_error = "ratings_not_from_local_files"
+            return
 
     base_dir = Path(settings.local_data_dir).resolve()
     cal_path = (base_dir / settings.local_calendar_filename).resolve()

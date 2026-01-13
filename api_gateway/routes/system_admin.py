@@ -57,7 +57,7 @@ async def rebuild_ratings(request: Request) -> RebuildRatingsResponse:
     else:
         raise HTTPException(status_code=400, detail="provider_not_supported")
 
-    payload = build_ratings_payload(championship_matches=championship_matches, asof_unix=asof)
+    payload = build_ratings_payload(championship_matches=championship_matches, asof_unix=asof, source=settings.data_provider)
     write_ratings_file(path=settings.ratings_path, payload=payload)
 
     request.app.state.data_error = None
