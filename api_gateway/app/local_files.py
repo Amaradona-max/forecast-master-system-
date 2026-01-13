@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +136,8 @@ def load_calendar_fixtures(
         d = _parse_date_only(r.get("Data"))
         if d is None:
             continue
+        if championship == "serie_a" and d == date(2026, 1, 14):
+            md = 16
 
         res = str(r.get("Risultato") or "").strip()
         kickoff_t = _parse_kickoff_time(res, date_is_future=(d >= today))
