@@ -284,9 +284,14 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
     predictor = PredictionService()
     orchestrator = AutoRefreshOrchestrator()
 
-    from_day = date(2026, 1, 1)
-    to_day = date(2026, 12, 31)
+    now_dt = datetime.now(timezone.utc)
+    from_day = (now_dt - timedelta(days=3)).date()
+    days_ahead = int(getattr(settings, "fixtures_days_ahead", 90) or 90)
+    to_day = (now_dt + timedelta(days=max(7, days_ahead))).date()
     headers = {"x-apisports-key": settings.api_football_key}
+
+    total_added = 0
+    last_error: str | None = None
 
     for champ, league_id in settings.api_football_league_ids.items():
         season = settings.api_football_season_years.get(champ)
@@ -298,12 +303,20 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
         try:
             payload = _http_get_json(url, headers=headers)
         except Exception:
+            last_error = "api_football_fetch_failed"
             if settings.real_data_only:
-                app.state.data_error = "api_football_fetch_failed"
+                app.state.data_error = last_error
             continue
 
         items = payload.get("response") if isinstance(payload, dict) else None
         if not isinstance(items, list):
+            if isinstance(payload, dict):
+                errors = payload.get("errors")
+                msg = payload.get("message") or payload.get("error")
+                if errors or msg:
+                    last_error = f"api_football_error:{str(msg or errors)}"
+                else:
+                    last_error = "api_football_bad_response"
             continue
 
         now0 = time.time()
@@ -332,8 +345,7 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                     kickoff_unix = None
 
             if kickoff_unix is not None:
-                y = datetime.fromtimestamp(float(kickoff_unix), tz=timezone.utc).year
-                if y != 2026:
+                if kickoff_unix < (now0 - 60 * 60 * 24 * 7):
                     continue
 
             md = _parse_matchday(league.get("round"))
@@ -373,6 +385,7 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                 )
 
             await state.upsert_match(m)
+            total_added += 1
             await hub.broadcast(
                 LiveUpdateEvent(
                     type="match_update",
@@ -390,6 +403,9 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                     },
                 )
             )
+
+    if total_added == 0:
+        app.state.data_error = last_error or "api_football_no_matches"
 
 
 async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:

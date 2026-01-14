@@ -44,6 +44,9 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
     matches = await state.list_matches()
     now_unix = datetime.now(timezone.utc).timestamp()
     predictions_start_unix = datetime(2026, 1, 14, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
+    if settings.data_provider == "api_football" and not matches:
+        detail = getattr(request.app.state, "data_error", None) or "api_football_no_matches"
+        raise HTTPException(status_code=503, detail=str(detail))
     if settings.real_data_only and getattr(request.app.state, "data_error", None):
         raise HTTPException(status_code=503, detail=str(request.app.state.data_error))
     if settings.real_data_only and not matches:
