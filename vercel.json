@@ -1,8 +1,6 @@
 {
-  "builds": [
-    {
-      "src": "dashboard/package.json",
-      "use": "@vercel/next"
-    }
-  ]
+  "framework": "nextjs",
+  "installCommand": "cd dashboard && npm ci",
+  "buildCommand": "cd dashboard && npm run build",
+  "devCommand": "cd dashboard && npm run dev"
 }
