@@ -12,6 +12,8 @@ from api_gateway.app.schemas import (
     OverviewMatch,
 )
 from api_gateway.app.settings import settings
+from api_gateway.app.state import AppState
+from api_gateway.app.ws import WebSocketHub
 from ml_engine.performance_targets import CHAMPIONSHIP_TARGETS
 
 
@@ -27,6 +29,10 @@ class SystemStatusResponse(BaseModel):
 
 @router.get("/api/v1/system/status", response_model=SystemStatusResponse)
 async def system_status(request: Request) -> SystemStatusResponse:
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
+    if not hasattr(request.app.state, "ws_hub"):
+        request.app.state.ws_hub = WebSocketHub()
     state = request.app.state.app_state
     matches = await state.list_matches()
     return SystemStatusResponse(
@@ -40,8 +46,35 @@ async def system_status(request: Request) -> SystemStatusResponse:
 
 @router.get("/api/v1/overview/championships", response_model=ChampionshipsOverviewResponse)
 async def championships_overview(request: Request) -> ChampionshipsOverviewResponse:
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
+    if not hasattr(request.app.state, "ws_hub"):
+        request.app.state.ws_hub = WebSocketHub()
     state = request.app.state.app_state
     matches = await state.list_matches()
+    if not matches and getattr(request.app.state, "data_error", None) is None:
+        now_unix0 = datetime.now(timezone.utc).timestamp()
+        last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
+        if not isinstance(last_attempt, (int, float)):
+            last_attempt = 0.0
+        if (now_unix0 - float(last_attempt)) >= 60.0:
+            request.app.state._seed_attempted_unix = now_unix0
+            try:
+                if settings.data_provider == "api_football":
+                    from api_gateway.main import _seed_from_api_football  # type: ignore
+
+                    await _seed_from_api_football(request.app.state.app_state, request.app.state.ws_hub)
+                elif settings.data_provider == "local_files":
+                    from api_gateway.main import _seed_from_local_files  # type: ignore
+
+                    await _seed_from_local_files(request.app.state.app_state, request.app.state.ws_hub)
+                elif settings.data_provider == "mock":
+                    from api_gateway.main import _seed_from_mock  # type: ignore
+
+                    await _seed_from_mock(request.app.state.app_state, request.app.state.ws_hub)
+            except Exception:
+                pass
+            matches = await state.list_matches()
     now_unix = datetime.now(timezone.utc).timestamp()
     predictions_start_unix = datetime(2026, 1, 14, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
     if settings.data_provider == "api_football" and not matches:
