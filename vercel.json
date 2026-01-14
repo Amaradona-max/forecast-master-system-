@@ -1,6 +1,15 @@
 {
-  "framework": "nextjs",
-  "installCommand": "cd dashboard && npm ci",
-  "buildCommand": "cd dashboard && npm run build",
-  "devCommand": "cd dashboard && npm run dev"
+  "version": 2,
+  "builds": [
+    {
+      "src": "dashboard/package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "dashboard$1"
+    }
+  ]
 }
