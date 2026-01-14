@@ -298,7 +298,8 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
         if not season:
             continue
 
-        qs = urlencode({"league": league_id, "season": season, "from": from_day.isoformat(), "to": to_day.isoformat(), "timezone": "UTC"})
+        base_params = {"league": league_id, "season": season, "timezone": "UTC"}
+        qs = urlencode({**base_params, "from": from_day.isoformat(), "to": to_day.isoformat()})
         url = f"{settings.api_football_base_url.rstrip('/')}/fixtures?{qs}"
         try:
             payload = _http_get_json(url, headers=headers)
@@ -318,6 +319,18 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                 else:
                     last_error = "api_football_bad_response"
             continue
+        if not items:
+            next_n = int(getattr(settings, "api_football_fixtures_next", 50) or 50)
+            next_n = max(10, min(200, next_n))
+            qs2 = urlencode({**base_params, "next": next_n})
+            url2 = f"{settings.api_football_base_url.rstrip('/')}/fixtures?{qs2}"
+            try:
+                payload2 = _http_get_json(url2, headers=headers)
+            except Exception:
+                payload2 = None
+            items2 = payload2.get("response") if isinstance(payload2, dict) else None
+            if isinstance(items2, list) and items2:
+                items = items2
 
         now0 = time.time()
         for it in items:
