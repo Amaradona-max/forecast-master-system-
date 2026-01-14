@@ -313,8 +313,10 @@ def _http_get_json(url: str, *, headers: dict[str, str]) -> Any:
 
 async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
     if not settings.api_football_key:
-        if settings.real_data_only:
-            app.state.data_error = "api_football_key_missing"
+        app.state.data_error = "api_football_key_missing"
+        return
+    if not settings.api_football_league_ids:
+        app.state.data_error = "api_football_config_missing"
         return
     if settings.real_data_only and not os.path.exists(settings.ratings_path):
         app.state.data_error = "ratings_missing"
@@ -335,6 +337,7 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
     for champ, league_id in settings.api_football_league_ids.items():
         season = settings.api_football_season_years.get(champ)
         if not season:
+            last_error = f"api_football_season_missing:{champ}"
             continue
 
         base_params = {"league": league_id, "season": season, "timezone": "UTC"}

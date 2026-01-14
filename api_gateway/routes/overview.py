@@ -24,6 +24,9 @@ class SystemStatusResponse(BaseModel):
     real_data_only: bool
     data_error: str | None = None
     matches_loaded: int
+    api_football_key_present: bool
+    api_football_leagues_configured: int
+    api_football_seasons_configured: int
     now_utc: datetime
 
 
@@ -40,6 +43,9 @@ async def system_status(request: Request) -> SystemStatusResponse:
         real_data_only=settings.real_data_only,
         data_error=getattr(request.app.state, "data_error", None),
         matches_loaded=len(matches),
+        api_football_key_present=bool(settings.api_football_key),
+        api_football_leagues_configured=len(settings.api_football_league_ids or {}),
+        api_football_seasons_configured=len(settings.api_football_season_years or {}),
         now_utc=datetime.now(timezone.utc),
     )
 
