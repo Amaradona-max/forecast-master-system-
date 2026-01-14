@@ -345,11 +345,21 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
         url = f"{settings.api_football_base_url.rstrip('/')}/fixtures?{qs}"
         try:
             payload = _http_get_json(url, headers=headers)
-        except Exception:
-            last_error = "api_football_fetch_failed"
+        except Exception as e:
+            last_error = f"api_football_fetch_failed:{type(e).__name__}"
             if settings.real_data_only:
                 app.state.data_error = last_error
             continue
+
+        if isinstance(payload, dict):
+            errors = payload.get("errors")
+            msg = payload.get("message") or payload.get("error")
+            if msg:
+                last_error = f"api_football_error:{str(msg)}"
+            elif isinstance(errors, dict) and any(bool(v) for v in errors.values()):
+                last_error = f"api_football_error:{json.dumps(errors, ensure_ascii=False)}"
+            elif isinstance(errors, list) and errors:
+                last_error = f"api_football_error:{json.dumps(errors, ensure_ascii=False)}"
 
         items = payload.get("response") if isinstance(payload, dict) else None
         if not isinstance(items, list):
@@ -370,6 +380,15 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                 payload2 = _http_get_json(url2, headers=headers)
             except Exception:
                 payload2 = None
+            if isinstance(payload2, dict):
+                errors2 = payload2.get("errors")
+                msg2 = payload2.get("message") or payload2.get("error")
+                if msg2:
+                    last_error = f"api_football_error:{str(msg2)}"
+                elif isinstance(errors2, dict) and any(bool(v) for v in errors2.values()):
+                    last_error = f"api_football_error:{json.dumps(errors2, ensure_ascii=False)}"
+                elif isinstance(errors2, list) and errors2:
+                    last_error = f"api_football_error:{json.dumps(errors2, ensure_ascii=False)}"
             items2 = payload2.get("response") if isinstance(payload2, dict) else None
             if isinstance(items2, list) and items2:
                 items = items2
