@@ -187,7 +187,14 @@ export function StatisticalPredictionsDashboard() {
     async function load() {
       try {
         const res = await fetch(apiUrl("/api/v1/overview/championships"), { cache: "no-store" })
-        if (!res.ok) throw new Error(`overview_failed:${res.status}`)
+        if (!res.ok) {
+          let detail = ""
+          try {
+            const body = (await res.json()) as { detail?: unknown }
+            if (body?.detail) detail = String(body.detail)
+          } catch {}
+          throw new Error(detail ? `overview_failed:${res.status}:${detail}` : `overview_failed:${res.status}`)
+        }
         const json = (await res.json()) as ChampionshipsOverviewResponse
         if (!active) return
         const list = [...(json.championships ?? [])].sort((a, b) => champOrderKey(a.championship) - champOrderKey(b.championship))
@@ -271,13 +278,14 @@ export function StatisticalPredictionsDashboard() {
   const gaugeValue = avgBest
 
   if (error) {
+    const apiLabel = getApiBaseUrl() || "same-origin"
     return (
       <Card>
         <div className="text-sm font-semibold tracking-tight">Dashboard</div>
-        <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">API: {getApiBaseUrl()}</div>
+        <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">API: {apiLabel}</div>
         <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{error}</div>
         <div className="mt-4 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
-          Se sei su Vercel e l’API punta a localhost, apri il sito con <span className="font-mono">?api=https://TUO-TUNNEL</span> per salvarlo.
+          Puoi impostare la base API anche senza rebuild aprendo il sito con <span className="font-mono">?api=https://TUO-TUNNEL</span>.
         </div>
       </Card>
     )
