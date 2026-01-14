@@ -32,7 +32,9 @@ export function getApiBaseUrl() {
   const runtime = readRuntimeApiBaseUrl()
   if (runtime) return normalizeApiBaseUrl(runtime)
   const env = process.env.NEXT_PUBLIC_API_BASE_URL
-  return normalizeApiBaseUrl(env) || "http://localhost:8000"
+  const normalizedEnv = normalizeApiBaseUrl(env)
+  if (normalizedEnv) return normalizedEnv
+  return process.env.NODE_ENV === "production" ? "" : "http://localhost:8000"
 }
 
 export function apiUrl(path: string) {
