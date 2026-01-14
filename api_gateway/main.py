@@ -49,6 +49,8 @@ async def startup() -> None:
     if settings.real_data_only and settings.data_provider == "mock":
         app.state.data_error = "real_data_provider_required"
         return
+    if settings.data_provider == "mock":
+        await _seed_from_mock(app.state.app_state, app.state.ws_hub)
     if settings.data_provider == "api_football":
         await _seed_from_api_football(app.state.app_state, app.state.ws_hub)
     if settings.data_provider == "local_files":
@@ -78,6 +80,43 @@ async def live_updates(ws: WebSocket) -> None:
                 await ws.send_json({"type": "subscribed", "payload": {"match_id": evt["match_id"], "ts": time.time()}})
     finally:
         await hub.disconnect(ws)
+
+
+async def _seed_from_mock(state: AppState, hub: WebSocketHub) -> None:
+    predictor = PredictionService()
+    orchestrator = AutoRefreshOrchestrator()
+    now0 = time.time()
+    seed_matches = _seed_fixtures(now0)
+    for m in seed_matches:
+        context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
+        context0.update(orchestrator.smart_update_context(m, now_unix=now0))
+        result0 = predictor.predict_match(
+            championship=m.championship,
+            home_team=m.home_team,
+            away_team=m.away_team,
+            status=m.status,
+            context=context0,
+        )
+        m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+        m.update(next_update_unix=orchestrator.compute_next_update_unix(m, now_unix=now0))
+        await state.upsert_match(m)
+        await hub.broadcast(
+            LiveUpdateEvent(
+                type="match_update",
+                payload={
+                    "match_id": m.match_id,
+                    "championship": m.championship,
+                    "home_team": m.home_team,
+                    "away_team": m.away_team,
+                    "status": m.status,
+                    "matchday": m.matchday,
+                    "kickoff_unix": m.kickoff_unix,
+                    "updated_at_unix": m.updated_at_unix,
+                    "probabilities": m.probabilities,
+                    "meta": m.meta,
+                },
+            )
+        )
 
 
 async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
