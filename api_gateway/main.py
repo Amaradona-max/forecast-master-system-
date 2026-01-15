@@ -534,7 +534,23 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
     total_added = 0
     last_error: str | None = None
 
-    for champ, code in settings.football_data_competition_codes.items():
+    comps = list((settings.football_data_competition_codes or {}).items())
+    max_n = int(getattr(settings, "football_data_max_competitions_per_seed", 1) or 1)
+    if max_n < 1:
+        max_n = 1
+    if max_n > len(comps):
+        max_n = len(comps)
+    idx0 = getattr(app.state, "_football_data_next_competition_index", 0)
+    idx = int(idx0) if isinstance(idx0, int) else 0
+    if idx < 0:
+        idx = 0
+    selected: list[tuple[str, str]] = []
+    if comps:
+        for i in range(max_n):
+            selected.append(comps[(idx + i) % len(comps)])
+        app.state._football_data_next_competition_index = (idx + max_n) % len(comps)
+
+    for champ, code in selected:
         qs = urlencode({"dateFrom": from_day.isoformat(), "dateTo": to_day.isoformat()})
         url = f"{settings.football_data_base_url.rstrip('/')}/competitions/{code}/matches?{qs}"
         try:
@@ -562,7 +578,16 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     last_error = f"football_data_http_404:not_found:{code}"
                 elif code0 == 429:
                     last_error = "football_data_http_429:rate_limited"
-                    app.state._football_data_rate_limited_until = time.time() + 120.0
+                    retry_after = None
+                    try:
+                        ra = e.headers.get("Retry-After") if getattr(e, "headers", None) is not None else None
+                        retry_after = int(str(ra).strip()) if ra is not None else None
+                    except Exception:
+                        retry_after = None
+                    cool = max(120, int(retry_after or 0))
+                    if cool > 3600:
+                        cool = 3600
+                    app.state._football_data_rate_limited_until = time.time() + float(cool)
                     app.state.data_error = last_error
                     return
                 else:
