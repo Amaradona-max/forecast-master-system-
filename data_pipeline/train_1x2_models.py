@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,13 @@ FOOTBALL_DATA_LEAGUE_TO_CHAMPIONSHIP: dict[str, str] = {
     "PL": "premier_league",
     "PD": "la_liga",
     "BL1": "bundesliga",
+}
+
+CALENDAR_SHEETS: dict[str, str] = {
+    "serie_a": "Serie A",
+    "premier_league": "Premier League",
+    "la_liga": "La Liga",
+    "bundesliga": "Bundesliga",
 }
 
 
@@ -278,6 +286,183 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
     return payload
 
 
+def _parse_score_cell(v: Any, *, date_is_past_or_today: bool) -> tuple[int, int] | None:
+    if v is None:
+        return None
+    if not date_is_past_or_today:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    m = re.search(r"(\d{1,2})\s*[-–:]\s*(\d{1,2})", s)
+    if not m:
+        return None
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except Exception:
+        return None
+
+
+def _calendar_rows_to_df(*, calendar_path: Path, championship: str, season_label: str) -> pd.DataFrame:
+    sheet = CALENDAR_SHEETS.get(championship)
+    if not sheet:
+        raise ValueError("unsupported_championship")
+    df = pd.read_excel(calendar_path, sheet_name=sheet)
+    required = {"Giornata", "Data", "Casa", "Risultato", "Trasferta"}
+    if not required.issubset(set(df.columns)):
+        raise ValueError("missing_columns:calendar")
+
+    rows: list[dict[str, Any]] = []
+    today = datetime.utcnow().date()
+    for i, r in df.iterrows():
+        home = str(r.get("Casa") or "").strip()
+        away = str(r.get("Trasferta") or "").strip()
+        if not home or not away:
+            continue
+        dt = pd.to_datetime(r.get("Data"), errors="coerce", dayfirst=True)
+        if pd.isna(dt):
+            continue
+        dt = dt.to_pydatetime()
+        md0 = r.get("Giornata")
+        md = int(md0) if isinstance(md0, (int, float)) and not (isinstance(md0, float) and math.isnan(md0)) else None
+        res = r.get("Risultato")
+        score = _parse_score_cell(res, date_is_past_or_today=(dt.date() <= today))
+        hg, ag, ftr = (None, None, "")
+        if score is not None:
+            hg, ag = score
+            if hg > ag:
+                ftr = "H"
+            elif hg < ag:
+                ftr = "A"
+            else:
+                ftr = "D"
+
+        rows.append(
+            {
+                "Season": season_label,
+                "Date": dt,
+                "HomeTeam": home,
+                "AwayTeam": away,
+                "FTHG": hg,
+                "FTAG": ag,
+                "FTR": ftr,
+                "Matchday": md,
+                "_row_id": int(i),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    out.sort_values(["Date", "_row_id"], inplace=True)
+    out.reset_index(drop=True, inplace=True)
+    return out
+
+
+def train_one_league_local_calendar(
+    *,
+    league: LeagueSpec,
+    base_dir: Path,
+    calendar_path: Path,
+    out_dir: Path,
+    split_ratio: float,
+    season_label: str,
+) -> dict[str, Any]:
+    hist_src = (base_dir / league.source_xlsx).resolve()
+    hist = _load_league_xlsx(hist_src)
+    cal = _calendar_rows_to_df(calendar_path=calendar_path, championship=league.championship, season_label=season_label)
+    df0 = pd.concat([hist, cal], ignore_index=True)
+    df0.sort_values(["Date", "MatchID"] if "MatchID" in df0.columns else ["Date"], inplace=True)
+    df0.reset_index(drop=True, inplace=True)
+    df = _build_features(df0, window=5)
+
+    df_season = df[(df["Season"].astype(str).str.strip() == season_label) & df["FTR"].isin(LABELS_1X2)].copy()
+    df_season.reset_index(drop=True, inplace=True)
+    n = len(df_season)
+    if n < 10:
+        payload = {
+            "championship": league.championship,
+            "source": str(calendar_path.resolve()),
+            "n_rows": int(n),
+            "split_ratio": float(split_ratio),
+            "train_rows": 0,
+            "test_rows": 0,
+            "metrics": {"accuracy": float("nan"), "log_loss": float("nan"), "brier": float("nan")},
+            "feature_cols": [],
+            "labels": LABELS_1X2,
+            "generated_at_utc": datetime.utcnow().isoformat(),
+        }
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"metrics_1x2_{league.championship}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return payload
+
+    feature_cols = [
+        "home_elo_pre",
+        "away_elo_pre",
+        "elo_diff",
+        "home_days_rest",
+        "away_days_rest",
+        "rest_diff",
+        "home_pts_last5",
+        "away_pts_last5",
+        "home_gf_last5",
+        "home_ga_last5",
+        "away_gf_last5",
+        "away_ga_last5",
+        "season_year",
+        "month",
+        "weekday",
+    ]
+
+    X = df_season[feature_cols]
+    y = df_season["FTR"].to_numpy()
+    split = int(math.floor(n * split_ratio))
+    split = max(1, min(n - 1, split))
+    X_train, X_test = X.iloc[:split], X.iloc[split:]
+    y_train, y_test = y[:split], y[split:]
+
+    pipe = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=2000, multi_class="multinomial")),
+        ]
+    )
+    pipe.fit(X_train, y_train)
+
+    proba = pipe.predict_proba(X_test)
+    acc = float(accuracy_score(y_test, pipe.predict(X_test)))
+    ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
+    brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_path = out_dir / f"model_1x2_{league.championship}.joblib"
+    metrics_path = out_dir / f"metrics_1x2_{league.championship}.json"
+
+    joblib.dump(
+        {
+            "pipeline": pipe,
+            "feature_cols": feature_cols,
+            "labels": LABELS_1X2,
+            "championship": league.championship,
+        },
+        model_path,
+    )
+
+    payload = {
+        "championship": league.championship,
+        "source": str(calendar_path.resolve()),
+        "n_rows": int(n),
+        "split_ratio": float(split_ratio),
+        "train_rows": int(len(X_train)),
+        "test_rows": int(len(X_test)),
+        "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
+        "feature_cols": feature_cols,
+        "labels": LABELS_1X2,
+        "generated_at_utc": datetime.utcnow().isoformat(),
+    }
+    metrics_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def _load_football_data_dataset_csv(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     if "utc_date" not in df.columns:
@@ -370,10 +555,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=str, default="data/models")
     ap.add_argument("--split-ratio", type=float, default=0.8)
-    ap.add_argument("--source", type=str, default="xlsx", choices=["xlsx", "csv"])
+    ap.add_argument("--source", type=str, default="xlsx", choices=["xlsx", "csv", "local_calendar"])
     ap.add_argument("--dataset-dir", type=str, default="out")
     ap.add_argument("--season", type=int, default=2025)
     ap.add_argument("--leagues", type=str, default="SA,PL,PD,BL1")
+    ap.add_argument("--calendar-file", type=str, default="Calendari_Calcio_2025_2026.xlsx")
+    ap.add_argument("--season-label", type=str, default="2025/2026")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -381,7 +568,19 @@ def main() -> None:
     base_dir = Path(__file__).resolve().parents[2]
 
     all_metrics: dict[str, Any] = {"generated_at_utc": datetime.utcnow().isoformat(), "leagues": {}}
-    if str(args.source) == "csv":
+    if str(args.source) == "local_calendar":
+        calendar_path = (base_dir / str(args.calendar_file)).resolve()
+        for league in LEAGUES:
+            row = train_one_league_local_calendar(
+                league=league,
+                base_dir=base_dir,
+                calendar_path=calendar_path,
+                out_dir=out_dir,
+                split_ratio=split_ratio,
+                season_label=str(args.season_label),
+            )
+            all_metrics["leagues"][league.championship] = row
+    elif str(args.source) == "csv":
         dataset_dir = (base_dir / str(args.dataset_dir)).resolve()
         season = int(args.season)
         leagues = [x.strip() for x in str(args.leagues).split(",") if x.strip()]
