@@ -71,7 +71,13 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
     state = request.app.state.app_state
     matches = await state.list_matches()
     provider = _effective_data_provider()
-    if not matches and getattr(request.app.state, "data_error", None) is None:
+    err = getattr(request.app.state, "data_error", None)
+    if provider == "football_data" and err == "football_data_http_429:rate_limited":
+        until = getattr(request.app.state, "_football_data_rate_limited_until", 0.0)
+        if isinstance(until, (int, float)) and float(until) <= datetime.now(timezone.utc).timestamp():
+            request.app.state.data_error = None
+            err = None
+    if not matches and err is None:
         now_unix0 = datetime.now(timezone.utc).timestamp()
         last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
         if not isinstance(last_attempt, (int, float)):

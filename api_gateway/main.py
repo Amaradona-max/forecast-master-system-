@@ -521,6 +521,11 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
     orchestrator = AutoRefreshOrchestrator()
 
     now_dt = datetime.now(timezone.utc)
+    now0 = time.time()
+    until = getattr(app.state, "_football_data_rate_limited_until", 0.0)
+    if isinstance(until, (int, float)) and float(until) > now0:
+        app.state.data_error = "football_data_http_429:rate_limited"
+        return
     from_day = (now_dt - timedelta(days=3)).date()
     days_ahead = int(getattr(settings, "fixtures_days_ahead", 90) or 90)
     to_day = (now_dt + timedelta(days=max(7, days_ahead))).date()
@@ -547,12 +552,19 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
             if isinstance(code0, int):
                 if code0 == 401:
                     last_error = f"football_data_http_401:unauthorized:{snippet}" if snippet else "football_data_http_401:unauthorized"
+                    app.state.data_error = last_error
+                    return
                 elif code0 == 403:
                     last_error = f"football_data_http_403:forbidden:{snippet}" if snippet else "football_data_http_403:forbidden"
+                    app.state.data_error = last_error
+                    return
                 elif code0 == 404:
                     last_error = f"football_data_http_404:not_found:{code}"
                 elif code0 == 429:
                     last_error = "football_data_http_429:rate_limited"
+                    app.state._football_data_rate_limited_until = time.time() + 120.0
+                    app.state.data_error = last_error
+                    return
                 else:
                     last_error = f"football_data_http_{code0}:{snippet}" if snippet else f"football_data_http_{code0}"
             else:
