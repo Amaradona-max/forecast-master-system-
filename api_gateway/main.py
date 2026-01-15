@@ -569,22 +569,34 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
         max_n = 1
     if max_n > len(comps):
         max_n = len(comps)
-    idx0 = getattr(app.state, "_football_data_next_competition_index", 0)
-    idx = int(idx0) if isinstance(idx0, int) else 0
-    if idx < 0:
-        idx = 0
+    if os.getenv("VERCEL") and comps:
+        bucket = 600.0
+        idx = int(now0 // bucket) % len(comps)
+    else:
+        idx0 = getattr(app.state, "_football_data_next_competition_index", 0)
+        idx = int(idx0) if isinstance(idx0, int) else 0
+        if idx < 0:
+            idx = 0
     selected: list[tuple[str, str]] = []
     if comps:
         for i in range(max_n):
             selected.append(comps[(idx + i) % len(comps)])
-        app.state._football_data_next_competition_index = (idx + max_n) % len(comps)
+        if not os.getenv("VERCEL"):
+            app.state._football_data_next_competition_index = (idx + max_n) % len(comps)
 
     for champ, code in selected:
         alpha = await state.get_calibration_alpha(champ)
         qs = urlencode({"dateFrom": from_day.isoformat(), "dateTo": to_day.isoformat()})
         url = f"{settings.football_data_base_url.rstrip('/')}/competitions/{code}/matches?{qs}"
+        cache_key = f"fd_matches:{code}:{from_day.isoformat()}:{to_day.isoformat()}"
+        ttl_seconds = 900.0 if os.getenv("VERCEL") else 240.0
+        cached = await state.get_cache_json(cache_key)
         try:
-            payload = _http_get_json(url, headers=headers)
+            if cached is not None:
+                payload = cached
+            else:
+                payload = _http_get_json(url, headers=headers)
+                await state.set_cache_json(cache_key, payload, ttl_seconds)
         except HTTPError as e:
             body = ""
             try:
@@ -618,8 +630,11 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     if cool > 3600:
                         cool = 3600
                     app.state._football_data_rate_limited_until = time.time() + float(cool)
-                    app.state.data_error = last_error
-                    return
+                    if cached is not None:
+                        payload = cached
+                    else:
+                        app.state.data_error = last_error
+                        return
                 else:
                     last_error = f"football_data_http_{code0}:{snippet}" if snippet else f"football_data_http_{code0}"
             else:

@@ -87,6 +87,16 @@ class AppState:
                     );
                     """
                 )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS api_cache (
+                        cache_key TEXT PRIMARY KEY,
+                        payload_json TEXT NOT NULL,
+                        fetched_at_unix REAL NOT NULL,
+                        ttl_seconds REAL NOT NULL
+                    );
+                    """
+                )
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_championship ON matches(championship);")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_kickoff_unix ON matches(kickoff_unix);")
@@ -216,6 +226,61 @@ class AppState:
         with sqlite3.connect(self._db_path, timeout=5) as con:
             con.execute("DELETE FROM matches;")
 
+    def _db_get_cache(self, cache_key: str, now_unix: float) -> str | None:
+        if not self._db_enabled:
+            return None
+        k = str(cache_key or "").strip()
+        if not k:
+            return None
+        with sqlite3.connect(self._db_path, timeout=5) as con:
+            row = con.execute(
+                """
+                SELECT payload_json, fetched_at_unix, ttl_seconds
+                FROM api_cache
+                WHERE cache_key=?;
+                """,
+                (k,),
+            ).fetchone()
+            if not isinstance(row, tuple) or len(row) < 3:
+                return None
+            payload_json, fetched_at_unix, ttl_seconds = row[0], row[1], row[2]
+            try:
+                fetched = float(fetched_at_unix)
+                ttl = float(ttl_seconds)
+            except Exception:
+                con.execute("DELETE FROM api_cache WHERE cache_key=?;", (k,))
+                return None
+            if ttl <= 0 or (float(now_unix) - fetched) > ttl:
+                con.execute("DELETE FROM api_cache WHERE cache_key=?;", (k,))
+                return None
+            return str(payload_json) if isinstance(payload_json, str) else None
+
+    def _db_set_cache(self, cache_key: str, payload_json: str, fetched_at_unix: float, ttl_seconds: float) -> None:
+        if not self._db_enabled:
+            return
+        k = str(cache_key or "").strip()
+        if not k:
+            return
+        try:
+            fetched = float(fetched_at_unix)
+            ttl = float(ttl_seconds)
+        except Exception:
+            return
+        if ttl <= 0:
+            return
+        with sqlite3.connect(self._db_path, timeout=5) as con:
+            con.execute(
+                """
+                INSERT INTO api_cache (cache_key, payload_json, fetched_at_unix, ttl_seconds)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    fetched_at_unix=excluded.fetched_at_unix,
+                    ttl_seconds=excluded.ttl_seconds;
+                """,
+                (k, str(payload_json), fetched, ttl),
+            )
+
     def _db_select_finished_rows(self, championship: str, since_unix: float) -> list[tuple[str, str]]:
         if not self._db_enabled:
             return []
@@ -294,6 +359,32 @@ class AppState:
             self._calibration_dirty = True
         if self._db_enabled:
             await asyncio.to_thread(self._db_clear_all)
+
+    async def get_cache_json(self, cache_key: str) -> Any | None:
+        if not self._db_enabled:
+            return None
+        raw = await asyncio.to_thread(self._db_get_cache, cache_key, float(time.time()))
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    async def set_cache_json(self, cache_key: str, payload: Any, ttl_seconds: float) -> None:
+        if not self._db_enabled:
+            return
+        try:
+            ttl = float(ttl_seconds)
+        except Exception:
+            return
+        if ttl <= 0:
+            return
+        try:
+            raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return
+        await asyncio.to_thread(self._db_set_cache, cache_key, raw, float(time.time()), ttl)
 
     async def get_calibration_alpha(self, championship: str) -> float:
         champ = str(championship or "").strip() or "all"

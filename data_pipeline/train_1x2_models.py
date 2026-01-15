@@ -33,6 +33,13 @@ LEAGUES: list[LeagueSpec] = [
 
 LABELS_1X2 = ["H", "D", "A"]
 
+FOOTBALL_DATA_LEAGUE_TO_CHAMPIONSHIP: dict[str, str] = {
+    "SA": "serie_a",
+    "PL": "premier_league",
+    "PD": "la_liga",
+    "BL1": "bundesliga",
+}
+
 
 def _safe_season_year(v: Any) -> int | None:
     s = str(v or "").strip()
@@ -271,10 +278,102 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
     return payload
 
 
+def _load_football_data_dataset_csv(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    if "utc_date" not in df.columns:
+        raise ValueError("missing_columns:utc_date")
+    if "result_1x2" not in df.columns:
+        raise ValueError("missing_columns:result_1x2")
+    df["utc_date"] = pd.to_datetime(df["utc_date"], errors="coerce")
+    df = df[df["utc_date"].notna()].copy()
+    df.sort_values(["utc_date", "match_id"] if "match_id" in df.columns else ["utc_date"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
+def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, split_ratio: float) -> dict[str, Any]:
+    df0 = _load_football_data_dataset_csv(csv_path)
+    df = df0[df0["result_1x2"].isin(LABELS_1X2)].copy()
+    df.reset_index(drop=True, inplace=True)
+
+    banned = {"home_goals", "away_goals", "result_1x2", "over_25", "btts"}
+    non_features = {
+        "competition",
+        "season",
+        "match_id",
+        "utc_date",
+        "status",
+        "matchday",
+        "home_team_id",
+        "away_team_id",
+        "home_team_name",
+        "away_team_name",
+    }
+    exclude = banned | non_features
+    feature_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
+    if not feature_cols:
+        raise ValueError("no_numeric_features")
+
+    X = df[feature_cols]
+    y = df["result_1x2"].astype(str).to_numpy()
+    n = len(df)
+    split = int(math.floor(n * split_ratio))
+    split = max(1, min(n - 1, split))
+    X_train, X_test = X.iloc[:split], X.iloc[split:]
+    y_train, y_test = y[:split], y[split:]
+
+    pipe = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=2000, multi_class="multinomial")),
+        ]
+    )
+    pipe.fit(X_train, y_train)
+
+    proba = pipe.predict_proba(X_test)
+    acc = float(accuracy_score(y_test, pipe.predict(X_test)))
+    ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
+    brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_path = out_dir / f"model_1x2_{championship}.joblib"
+    metrics_path = out_dir / f"metrics_1x2_{championship}.json"
+
+    joblib.dump(
+        {
+            "pipeline": pipe,
+            "feature_cols": feature_cols,
+            "labels": LABELS_1X2,
+            "championship": championship,
+        },
+        model_path,
+    )
+
+    payload = {
+        "championship": championship,
+        "source": str(csv_path.resolve()),
+        "n_rows": int(n),
+        "split_ratio": float(split_ratio),
+        "train_rows": int(len(X_train)),
+        "test_rows": int(len(X_test)),
+        "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
+        "feature_cols": feature_cols,
+        "labels": LABELS_1X2,
+        "generated_at_utc": datetime.utcnow().isoformat(),
+    }
+    metrics_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=str, default="data/models")
     ap.add_argument("--split-ratio", type=float, default=0.8)
+    ap.add_argument("--source", type=str, default="xlsx", choices=["xlsx", "csv"])
+    ap.add_argument("--dataset-dir", type=str, default="out")
+    ap.add_argument("--season", type=int, default=2025)
+    ap.add_argument("--leagues", type=str, default="SA,PL,PD,BL1")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -282,9 +381,21 @@ def main() -> None:
     base_dir = Path(__file__).resolve().parents[2]
 
     all_metrics: dict[str, Any] = {"generated_at_utc": datetime.utcnow().isoformat(), "leagues": {}}
-    for league in LEAGUES:
-        row = train_one_league(league=league, base_dir=base_dir, out_dir=out_dir, split_ratio=split_ratio)
-        all_metrics["leagues"][league.championship] = row
+    if str(args.source) == "csv":
+        dataset_dir = (base_dir / str(args.dataset_dir)).resolve()
+        season = int(args.season)
+        leagues = [x.strip() for x in str(args.leagues).split(",") if x.strip()]
+        for code in leagues:
+            champ = FOOTBALL_DATA_LEAGUE_TO_CHAMPIONSHIP.get(code)
+            if not champ:
+                continue
+            csv_path = dataset_dir / f"dataset_{code}_{season}.csv"
+            row = train_one_league_csv(championship=champ, csv_path=csv_path, out_dir=out_dir, split_ratio=split_ratio)
+            all_metrics["leagues"][champ] = row
+    else:
+        for league in LEAGUES:
+            row = train_one_league(league=league, base_dir=base_dir, out_dir=out_dir, split_ratio=split_ratio)
+            all_metrics["leagues"][league.championship] = row
 
     (out_dir / "metrics_1x2_all.json").write_text(json.dumps(all_metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
