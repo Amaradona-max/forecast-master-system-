@@ -50,6 +50,32 @@ def _effective_data_provider() -> str:
     return provider
 
 
+def _calibrate_probs(probs: dict[str, float], alpha: float) -> dict[str, float]:
+    try:
+        a = float(alpha)
+    except Exception:
+        a = 0.0
+    if a <= 0.0:
+        return probs
+    if a > 0.35:
+        a = 0.35
+    p1 = float(probs.get("home_win", 0.0) or 0.0)
+    px = float(probs.get("draw", 0.0) or 0.0)
+    p2 = float(probs.get("away_win", 0.0) or 0.0)
+    s = max(p1, 0.0) + max(px, 0.0) + max(p2, 0.0)
+    if s <= 0:
+        p1, px, p2 = 1 / 3, 1 / 3, 1 / 3
+    else:
+        p1, px, p2 = max(p1, 0.0) / s, max(px, 0.0) / s, max(p2, 0.0) / s
+    p1 = (1.0 - a) * p1 + a / 3.0
+    px = (1.0 - a) * px + a / 3.0
+    p2 = (1.0 - a) * p2 + a / 3.0
+    s2 = p1 + px + p2
+    if s2 <= 0:
+        return {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
+    return {"home_win": p1 / s2, "draw": px / s2, "away_win": p2 / s2}
+
+
 @app.on_event("startup")
 async def startup() -> None:
     app.state.app_state = AppState()
@@ -361,6 +387,7 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
         if not season:
             last_error = f"api_football_season_missing:{champ}"
             continue
+        alpha = await state.get_calibration_alpha(champ)
 
         base_params = {"league": league_id, "season": season, "timezone": "UTC"}
         qs = urlencode({**base_params, "from": from_day.isoformat(), "to": to_day.isoformat()})
@@ -464,6 +491,7 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                 ag = goals.get("away")
                 if isinstance(hg, (int, float)) and isinstance(ag, (int, float)):
                     context0["final_score"] = {"home": int(hg), "away": int(ag)}
+            context0["calibration"] = {"alpha": float(alpha)}
 
             try:
                 result0 = predictor.predict_match(
@@ -473,7 +501,8 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                     status=m.status,
                     context=context0,
                 )
-                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -551,6 +580,7 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
         app.state._football_data_next_competition_index = (idx + max_n) % len(comps)
 
     for champ, code in selected:
+        alpha = await state.get_calibration_alpha(champ)
         qs = urlencode({"dateFrom": from_day.isoformat(), "dateTo": to_day.isoformat()})
         url = f"{settings.football_data_base_url.rstrip('/')}/competitions/{code}/matches?{qs}"
         try:
@@ -661,6 +691,7 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
             context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
             context0.update(orchestrator.smart_update_context(m, now_unix=now0))
             context0["source"] = {"provider": "football_data", "competition": code, "match_id": match_pk}
+            context0["calibration"] = {"alpha": float(alpha)}
 
             if st == "FINISHED":
                 score = it.get("score") if isinstance(it.get("score"), dict) else {}
@@ -678,7 +709,8 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
                     context=context0,
                 )
-                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -735,6 +767,7 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
     now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
 
     for champ in settings.api_football_league_ids.keys():
+        alpha = await state.get_calibration_alpha(champ)
         fixtures = load_calendar_fixtures(base_dir=base_dir, calendar_filename=settings.local_calendar_filename, championship=champ, now_utc=now_dt)
         for i, f in enumerate(fixtures):
             match_id = f"{champ}_local_{f.matchday or 0}_{i:04d}"
@@ -753,6 +786,7 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
                 context0["source"] = dict(f.source)
             if f.final_score is not None:
                 context0["final_score"] = dict(f.final_score)
+            context0["calibration"] = {"alpha": float(alpha)}
 
             try:
                 result0 = predictor.predict_match(
@@ -762,7 +796,8 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
                     context=context0,
                 )
-                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},

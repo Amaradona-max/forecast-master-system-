@@ -11,6 +11,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+*.sqlite
+*.sqlite3
+*.db
+data/models/
 .venv/
 venv/
 

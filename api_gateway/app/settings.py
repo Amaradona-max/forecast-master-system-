@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Annotated
 
 from pydantic import field_validator
@@ -15,6 +16,8 @@ class Settings(BaseSettings):
     live_tick_seconds: int = 30
     real_data_only: bool = False
     data_provider: str = "mock"
+    state_db_path: str = "/tmp/forecast_state.sqlite3" if os.getenv("VERCEL") else "data/forecast_state.sqlite3"
+    calibration_lookback_days: int = 365
 
     api_football_key: str | None = None
     api_football_base_url: str = "https://v3.football.api-sports.io"
@@ -41,7 +44,7 @@ class Settings(BaseSettings):
         "la_liga": "PD",
         "bundesliga": "BL1",
     }
-    football_data_max_competitions_per_seed: int = 1
+    football_data_max_competitions_per_seed: int = 4
     fixtures_days_ahead: int = 90
     ratings_path: str = "data/team_ratings.json"
     historical_start_season: int = 2015

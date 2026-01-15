@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -25,6 +26,45 @@ def _effective_data_provider() -> str:
     if provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
         return "football_data"
     return provider
+
+
+def _supported_championships(provider: str) -> list[str]:
+    order = ["serie_a", "premier_league", "la_liga", "bundesliga", "eliteserien"]
+    if provider == "football_data":
+        keys = list((settings.football_data_competition_codes or {}).keys())
+    elif provider in {"api_football", "local_files"}:
+        keys = list((settings.api_football_league_ids or {}).keys())
+    else:
+        keys = list(order)
+
+    keys = [k for k in keys if k in order]
+    out = [c for c in order if c in keys]
+    for c in keys:
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def _top_score(probs: dict[str, float]) -> float:
+    p1 = float(probs.get("home_win", 0.0) or 0.0)
+    px = float(probs.get("draw", 0.0) or 0.0)
+    p2 = float(probs.get("away_win", 0.0) or 0.0)
+    v = sorted([max(p1, 0.0), max(px, 0.0), max(p2, 0.0)], reverse=True)
+    best = v[0] if v else 0.0
+    second = v[1] if len(v) > 1 else 0.0
+    margin = max(best - second, 0.0)
+    denom = math.log(3.0)
+    ent = 0.0
+    for p in (best, second, v[2] if len(v) > 2 else 0.0):
+        ent += -p * math.log(max(p, 1e-12))
+    ent_n = (ent / denom) if denom > 0 else 1.0
+    certainty = 1.0 - min(max(ent_n, 0.0), 1.0)
+    score = best + (0.40 * margin) + (0.15 * certainty)
+    if score < 0.0:
+        return 0.0
+    if score > 1.0:
+        return 1.0
+    return float(score)
 
 
 class SystemStatusResponse(BaseModel):
@@ -71,13 +111,19 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
     state = request.app.state.app_state
     matches = await state.list_matches()
     provider = _effective_data_provider()
+    champs = _supported_championships(provider)
     err = getattr(request.app.state, "data_error", None)
     if provider == "football_data" and err == "football_data_http_429:rate_limited":
         until = getattr(request.app.state, "_football_data_rate_limited_until", 0.0)
         if isinstance(until, (int, float)) and float(until) <= datetime.now(timezone.utc).timestamp():
             request.app.state.data_error = None
             err = None
-    if not matches and err is None:
+    missing_champs = []
+    if matches and champs:
+        present = {m.championship for m in matches}
+        missing_champs = [c for c in champs if c not in present]
+
+    if (not matches or missing_champs) and err is None:
         now_unix0 = datetime.now(timezone.utc).timestamp()
         last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
         if not isinstance(last_attempt, (int, float)):
@@ -122,7 +168,7 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         by_champ.setdefault(m.championship, []).append(m)
 
     payload: list[ChampionshipOverview] = []
-    for champ in ["serie_a", "premier_league", "la_liga", "bundesliga", "eliteserien"]:
+    for champ in champs:
         rows = by_champ.get(champ, [])
         mapped: list[OverviewMatch] = []
         for m in rows:
@@ -139,7 +185,7 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
                 probs = {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
             else:
                 probs = {k: v / s for k, v in probs.items()}
-            conf = max(probs.values())
+            conf = _top_score(probs)
             explain = {}
             source = {}
             final_score = None

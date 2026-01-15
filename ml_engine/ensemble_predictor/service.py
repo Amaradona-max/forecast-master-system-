@@ -72,6 +72,18 @@ class EnsemblePredictorService:
                     s = p_home + p_draw + p_away
                     p_home, p_draw, p_away = p_home / s, p_draw / s, p_away / s
 
+        shrink = 0.0
+        if missing_home and missing_away:
+            shrink = 0.22
+        elif missing_home or missing_away:
+            shrink = 0.12
+        if shrink > 0:
+            u = 1.0 / 3.0
+            p_home = (1.0 - shrink) * p_home + shrink * u
+            p_draw = (1.0 - shrink) * p_draw + shrink * u
+            p_away = (1.0 - shrink) * p_away + shrink * u
+            p_home, p_draw, p_away = _normalize3(p_home, p_draw, p_away)
+
         explain = {
             "championship_key_features": list(target.get("key_features", [])),
             "components": {
@@ -87,6 +99,7 @@ class EnsemblePredictorService:
                 "status": status,
                 "lam_home": float(lam_home),
                 "lam_away": float(lam_away),
+                "probability_shrinkage": float(shrink),
             },
             "derived_markets": {
                 "over_2_5": float(poisson["goals"]["over_2_5"]),

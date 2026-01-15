@@ -62,6 +62,7 @@ async def rebuild_ratings(request: Request) -> RebuildRatingsResponse:
 
     request.app.state.data_error = None
     request.app.state.app_state = AppState()
+    await request.app.state.app_state.clear_all()
 
     try:
         if settings.data_provider == "api_football":
