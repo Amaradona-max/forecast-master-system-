@@ -9,6 +9,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -504,7 +505,9 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
 
 
 async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
-    if not settings.football_data_key:
+    raw_key = str(settings.football_data_key or "").strip()
+    key = raw_key.strip('"').strip("'").strip()
+    if not key:
         app.state.data_error = "football_data_key_missing"
         return
     if not settings.football_data_competition_codes:
@@ -521,7 +524,7 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
     from_day = (now_dt - timedelta(days=3)).date()
     days_ahead = int(getattr(settings, "fixtures_days_ahead", 90) or 90)
     to_day = (now_dt + timedelta(days=max(7, days_ahead))).date()
-    headers = {"X-Auth-Token": settings.football_data_key}
+    headers = {"X-Auth-Token": key, "Accept": "application/json", "User-Agent": str(getattr(settings, "app_name", "Forecast Master System API"))}
 
     total_added = 0
     last_error: str | None = None
@@ -531,6 +534,37 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
         url = f"{settings.football_data_base_url.rstrip('/')}/competitions/{code}/matches?{qs}"
         try:
             payload = _http_get_json(url, headers=headers)
+        except HTTPError as e:
+            body = ""
+            try:
+                body = (e.read() or b"").decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            snippet = body.strip().replace("\n", " ")
+            if len(snippet) > 220:
+                snippet = snippet[:220] + "…"
+            code0 = getattr(e, "code", None)
+            if isinstance(code0, int):
+                if code0 == 401:
+                    last_error = f"football_data_http_401:unauthorized:{snippet}" if snippet else "football_data_http_401:unauthorized"
+                elif code0 == 403:
+                    last_error = f"football_data_http_403:forbidden:{snippet}" if snippet else "football_data_http_403:forbidden"
+                elif code0 == 404:
+                    last_error = f"football_data_http_404:not_found:{code}"
+                elif code0 == 429:
+                    last_error = "football_data_http_429:rate_limited"
+                else:
+                    last_error = f"football_data_http_{code0}:{snippet}" if snippet else f"football_data_http_{code0}"
+            else:
+                last_error = "football_data_fetch_failed:HTTPError"
+            if settings.real_data_only:
+                app.state.data_error = last_error
+            continue
+        except URLError as e:
+            last_error = f"football_data_network_error:{type(e).__name__}"
+            if settings.real_data_only:
+                app.state.data_error = last_error
+            continue
         except Exception as e:
             last_error = f"football_data_fetch_failed:{type(e).__name__}"
             if settings.real_data_only:
