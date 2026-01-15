@@ -32,6 +32,15 @@ class Settings(BaseSettings):
         "bundesliga": 2025,
         "eliteserien": 2026,
     }
+
+    football_data_key: str | None = None
+    football_data_base_url: str = "https://api.football-data.org/v4"
+    football_data_competition_codes: dict[str, str] = {
+        "serie_a": "SA",
+        "premier_league": "PL",
+        "la_liga": "PD",
+        "bundesliga": "BL1",
+    }
     fixtures_days_ahead: int = 90
     ratings_path: str = "data/team_ratings.json"
     historical_start_season: int = 2015

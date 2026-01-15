@@ -42,21 +42,31 @@ app.include_router(overview.router)
 app.include_router(system_admin.router)
 
 
+def _effective_data_provider() -> str:
+    provider = str(getattr(settings, "data_provider", "") or "").strip()
+    if provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
+        return "football_data"
+    return provider
+
+
 @app.on_event("startup")
 async def startup() -> None:
     app.state.app_state = AppState()
     app.state.ws_hub = WebSocketHub()
-    if settings.real_data_only and settings.data_provider == "mock":
+    provider = _effective_data_provider()
+    if settings.real_data_only and provider == "mock":
         app.state.data_error = "real_data_provider_required"
         return
-    if settings.data_provider == "mock":
+    if provider == "mock":
         await _seed_from_mock(app.state.app_state, app.state.ws_hub)
-    if settings.data_provider == "api_football":
+    if provider == "api_football":
         await _seed_from_api_football(app.state.app_state, app.state.ws_hub)
-    if settings.data_provider == "local_files":
+    if provider == "football_data":
+        await _seed_from_football_data(app.state.app_state, app.state.ws_hub)
+    if provider == "local_files":
         await _seed_from_local_files(app.state.app_state, app.state.ws_hub)
 
-    if settings.simulate_live_updates and settings.data_provider == "mock":
+    if settings.simulate_live_updates and provider == "mock":
         app.state.sim_task = asyncio.create_task(_simulate_live_updates(app.state.app_state, app.state.ws_hub))
 
 
@@ -304,6 +314,17 @@ def _map_api_football_status(short: str | None) -> str:
     return "PREMATCH"
 
 
+def _map_football_data_status(status: str | None) -> str:
+    s = str(status or "").upper()
+    if s in {"FINISHED"}:
+        return "FINISHED"
+    if s in {"IN_PLAY", "PAUSED"}:
+        return "LIVE"
+    if s in {"SCHEDULED", "TIMED", "POSTPONED", "SUSPENDED", "CANCELED"}:
+        return "PREMATCH"
+    return "PREMATCH"
+
+
 def _http_get_json(url: str, *, headers: dict[str, str]) -> Any:
     req = Request(url, headers=headers, method="GET")
     with urlopen(req, timeout=30) as resp:
@@ -480,6 +501,141 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
 
     if total_added == 0:
         app.state.data_error = last_error or "api_football_no_matches"
+
+
+async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
+    if not settings.football_data_key:
+        app.state.data_error = "football_data_key_missing"
+        return
+    if not settings.football_data_competition_codes:
+        app.state.data_error = "football_data_config_missing"
+        return
+    if settings.real_data_only and not os.path.exists(settings.ratings_path):
+        app.state.data_error = "ratings_missing"
+        return
+
+    predictor = PredictionService()
+    orchestrator = AutoRefreshOrchestrator()
+
+    now_dt = datetime.now(timezone.utc)
+    from_day = (now_dt - timedelta(days=3)).date()
+    days_ahead = int(getattr(settings, "fixtures_days_ahead", 90) or 90)
+    to_day = (now_dt + timedelta(days=max(7, days_ahead))).date()
+    headers = {"X-Auth-Token": settings.football_data_key}
+
+    total_added = 0
+    last_error: str | None = None
+
+    for champ, code in settings.football_data_competition_codes.items():
+        qs = urlencode({"dateFrom": from_day.isoformat(), "dateTo": to_day.isoformat()})
+        url = f"{settings.football_data_base_url.rstrip('/')}/competitions/{code}/matches?{qs}"
+        try:
+            payload = _http_get_json(url, headers=headers)
+        except Exception as e:
+            last_error = f"football_data_fetch_failed:{type(e).__name__}"
+            if settings.real_data_only:
+                app.state.data_error = last_error
+            continue
+
+        if isinstance(payload, dict):
+            msg = payload.get("message") or payload.get("error")
+            if msg:
+                last_error = f"football_data_error:{str(msg)}"
+
+        items = payload.get("matches") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            if isinstance(payload, dict):
+                msg = payload.get("message") or payload.get("error")
+                if msg:
+                    last_error = f"football_data_error:{str(msg)}"
+                else:
+                    last_error = "football_data_bad_response"
+            continue
+
+        now0 = time.time()
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            match_pk = it.get("id")
+            if match_pk is None:
+                continue
+            match_id = f"{champ}_fd_{match_pk}"
+
+            kickoff_iso = it.get("utcDate")
+            kickoff_unix = None
+            if isinstance(kickoff_iso, str) and kickoff_iso:
+                try:
+                    kickoff_unix = datetime.fromisoformat(kickoff_iso.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    kickoff_unix = None
+
+            if kickoff_unix is not None and kickoff_unix < (now0 - 60 * 60 * 24 * 7):
+                continue
+
+            md0 = it.get("matchday")
+            md = int(md0) if isinstance(md0, int) else None
+            st = _map_football_data_status(it.get("status"))
+            home = it.get("homeTeam") if isinstance(it.get("homeTeam"), dict) else {}
+            away = it.get("awayTeam") if isinstance(it.get("awayTeam"), dict) else {}
+
+            m = LiveMatchState(
+                match_id=match_id,
+                championship=champ,
+                home_team=str(home.get("name") or "").strip() or "Home",
+                away_team=str(away.get("name") or "").strip() or "Away",
+                status=st,
+            )
+            m.update(matchday=md, kickoff_unix=kickoff_unix)
+
+            context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
+            context0.update(orchestrator.smart_update_context(m, now_unix=now0))
+            context0["source"] = {"provider": "football_data", "competition": code, "match_id": match_pk}
+
+            if st == "FINISHED":
+                score = it.get("score") if isinstance(it.get("score"), dict) else {}
+                full = score.get("fullTime") if isinstance(score.get("fullTime"), dict) else {}
+                hg = full.get("home")
+                ag = full.get("away")
+                if isinstance(hg, int) and isinstance(ag, int):
+                    context0["final_score"] = {"home": int(hg), "away": int(ag)}
+
+            try:
+                result0 = predictor.predict_match(
+                    championship=m.championship,
+                    home_team=m.home_team,
+                    away_team=m.away_team,
+                    status="PREMATCH" if m.status == "FINISHED" else m.status,
+                    context=context0,
+                )
+                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+            except Exception as e:
+                m.update(
+                    probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
+                    meta={"context": context0, "explain": {"error": "prediction_failed", "error_type": type(e).__name__}},
+                )
+
+            await state.upsert_match(m)
+            total_added += 1
+            await hub.broadcast(
+                LiveUpdateEvent(
+                    type="match_update",
+                    payload={
+                        "match_id": m.match_id,
+                        "championship": m.championship,
+                        "home_team": m.home_team,
+                        "away_team": m.away_team,
+                        "status": m.status,
+                        "matchday": m.matchday,
+                        "kickoff_unix": m.kickoff_unix,
+                        "updated_at_unix": m.updated_at_unix,
+                        "probabilities": m.probabilities,
+                        "meta": m.meta,
+                    },
+                )
+            )
+
+    if total_added == 0:
+        app.state.data_error = last_error or "football_data_no_matches"
 
 
 async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:

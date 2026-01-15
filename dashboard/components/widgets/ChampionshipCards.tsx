@@ -117,9 +117,9 @@ export function ChampionshipCards() {
         ) : null}
         <div className="mt-4 rounded-2xl border border-amber-200/70 bg-amber-50/70 p-3 text-xs text-amber-900 backdrop-blur-md dark:border-amber-900/40 dark:bg-amber-950/35 dark:text-amber-100">
           <div className="font-medium">Per sbloccare i calendari 2026 (solo dati reali)</div>
-          {status.data_error === "api_football_key_missing" ? (
+          {status.data_error === "football_data_key_missing" || status.data_error === "api_football_key_missing" ? (
             <div className="mt-1">
-              Apri <span className="font-mono">forecast-master-system/.env</span> e imposta <span className="font-mono">FORECAST_API_FOOTBALL_KEY</span>, poi riavvia l’API.
+              Apri <span className="font-mono">forecast-master-system/.env</span> e imposta <span className="font-mono">FORECAST_FOOTBALL_DATA_KEY</span> (e <span className="font-mono">FORECAST_DATA_PROVIDER=football_data</span>), poi riavvia l’API.
             </div>
           ) : status.data_error === "ratings_missing" ? (
             <div className="mt-1">

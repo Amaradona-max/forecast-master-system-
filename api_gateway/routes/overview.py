@@ -19,6 +19,14 @@ from ml_engine.performance_targets import CHAMPIONSHIP_TARGETS
 
 router = APIRouter()
 
+
+def _effective_data_provider() -> str:
+    provider = str(getattr(settings, "data_provider", "") or "").strip()
+    if provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
+        return "football_data"
+    return provider
+
+
 class SystemStatusResponse(BaseModel):
     data_provider: str
     real_data_only: bool
@@ -27,6 +35,8 @@ class SystemStatusResponse(BaseModel):
     api_football_key_present: bool
     api_football_leagues_configured: int
     api_football_seasons_configured: int
+    football_data_key_present: bool
+    football_data_competitions_configured: int
     now_utc: datetime
 
 
@@ -39,13 +49,15 @@ async def system_status(request: Request) -> SystemStatusResponse:
     state = request.app.state.app_state
     matches = await state.list_matches()
     return SystemStatusResponse(
-        data_provider=settings.data_provider,
+        data_provider=_effective_data_provider(),
         real_data_only=settings.real_data_only,
         data_error=getattr(request.app.state, "data_error", None),
         matches_loaded=len(matches),
         api_football_key_present=bool(settings.api_football_key),
         api_football_leagues_configured=len(settings.api_football_league_ids or {}),
         api_football_seasons_configured=len(settings.api_football_season_years or {}),
+        football_data_key_present=bool(settings.football_data_key),
+        football_data_competitions_configured=len(settings.football_data_competition_codes or {}),
         now_utc=datetime.now(timezone.utc),
     )
 
@@ -58,6 +70,7 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         request.app.state.ws_hub = WebSocketHub()
     state = request.app.state.app_state
     matches = await state.list_matches()
+    provider = _effective_data_provider()
     if not matches and getattr(request.app.state, "data_error", None) is None:
         now_unix0 = datetime.now(timezone.utc).timestamp()
         last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
@@ -66,15 +79,19 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         if (now_unix0 - float(last_attempt)) >= 60.0:
             request.app.state._seed_attempted_unix = now_unix0
             try:
-                if settings.data_provider == "api_football":
+                if provider == "api_football":
                     from api_gateway.main import _seed_from_api_football  # type: ignore
 
                     await _seed_from_api_football(request.app.state.app_state, request.app.state.ws_hub)
-                elif settings.data_provider == "local_files":
+                elif provider == "football_data":
+                    from api_gateway.main import _seed_from_football_data  # type: ignore
+
+                    await _seed_from_football_data(request.app.state.app_state, request.app.state.ws_hub)
+                elif provider == "local_files":
                     from api_gateway.main import _seed_from_local_files  # type: ignore
 
                     await _seed_from_local_files(request.app.state.app_state, request.app.state.ws_hub)
-                elif settings.data_provider == "mock":
+                elif provider == "mock":
                     from api_gateway.main import _seed_from_mock  # type: ignore
 
                     await _seed_from_mock(request.app.state.app_state, request.app.state.ws_hub)
@@ -83,8 +100,11 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
             matches = await state.list_matches()
     now_unix = datetime.now(timezone.utc).timestamp()
     predictions_start_unix = datetime(2026, 1, 14, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
-    if settings.data_provider == "api_football" and not matches:
+    if provider == "api_football" and not matches:
         detail = getattr(request.app.state, "data_error", None) or "api_football_no_matches"
+        raise HTTPException(status_code=503, detail=str(detail))
+    if provider == "football_data" and not matches:
+        detail = getattr(request.app.state, "data_error", None) or "football_data_no_matches"
         raise HTTPException(status_code=503, detail=str(detail))
     if settings.real_data_only and getattr(request.app.state, "data_error", None):
         raise HTTPException(status_code=503, detail=str(request.app.state.data_error))
