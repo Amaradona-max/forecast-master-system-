@@ -44,7 +44,7 @@ class Settings(BaseSettings):
         "la_liga": "PD",
         "bundesliga": "BL1",
     }
-    football_data_max_competitions_per_seed: int = 1 if os.getenv("VERCEL") else 4
+    football_data_max_competitions_per_seed: int = 4
     fixtures_days_ahead: int = 90
     ratings_path: str = "data/team_ratings.json"
     historical_start_season: int = 2015
