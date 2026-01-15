@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -128,7 +129,10 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
         if not isinstance(last_attempt, (int, float)):
             last_attempt = 0.0
-        if (now_unix0 - float(last_attempt)) >= 60.0:
+        seed_interval = 60.0
+        if provider == "football_data":
+            seed_interval = 600.0 if os.getenv("VERCEL") else 300.0
+        if (now_unix0 - float(last_attempt)) >= seed_interval:
             request.app.state._seed_attempted_unix = now_unix0
             try:
                 if provider == "api_football":
@@ -157,8 +161,12 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         raise HTTPException(status_code=503, detail=str(detail))
     if provider == "football_data" and not matches:
         detail = getattr(request.app.state, "data_error", None) or "football_data_no_matches"
+        if str(detail) == "football_data_http_429:rate_limited":
+            return ChampionshipsOverviewResponse(generated_at_utc=datetime.now(timezone.utc), championships=[])
         raise HTTPException(status_code=503, detail=str(detail))
     if settings.real_data_only and getattr(request.app.state, "data_error", None):
+        if str(getattr(request.app.state, "data_error", "")) == "football_data_http_429:rate_limited":
+            return ChampionshipsOverviewResponse(generated_at_utc=datetime.now(timezone.utc), championships=[])
         raise HTTPException(status_code=503, detail=str(request.app.state.data_error))
     if settings.real_data_only and not matches:
         raise HTTPException(status_code=503, detail="real_data_not_loaded")
