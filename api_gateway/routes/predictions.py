@@ -63,8 +63,15 @@ async def batch_predictions(req: BatchPredictionRequest, request: Request) -> Ba
             status=live.status,
             context=context0,
         )
-        probs = _calibrate_probs(dict(result.probabilities or {}), alpha)
-        live.update(probabilities=probs, meta={"context": context0, "explain": result.explain})
+        calibrated = False
+        if isinstance(result.explain, dict):
+            ec = result.explain.get("ensemble_components")
+            if isinstance(ec, dict):
+                calibrated = bool(ec.get("calibrated"))
+        probs = dict(result.probabilities or {})
+        if not calibrated:
+            probs = _calibrate_probs(probs, alpha)
+        live.update(probabilities=probs, meta={"context": context0, "explain": result.explain, "confidence": result.confidence, "ranges": result.ranges})
         await state.upsert_match(live)
 
         predictions.append(

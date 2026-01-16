@@ -163,4 +163,7 @@ def get_team_strength(*, championship: str, team: str, ratings_path: str | None 
         "ratings_source": "elo",
         "ratings_path": path,
     }
+    elo = row.get("elo")
+    if isinstance(elo, (int, float)):
+        meta["elo"] = float(elo)
     return RatingsLookup(strength=float(strength), meta=meta)

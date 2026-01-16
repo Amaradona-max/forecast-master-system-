@@ -127,6 +127,8 @@ async def _seed_from_mock(state: AppState, hub: WebSocketHub) -> None:
     for m in seed_matches:
         context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
         context0.update(orchestrator.smart_update_context(m, now_unix=now0))
+        if m.matchday is not None:
+            context0["matchday"] = int(m.matchday)
         result0 = predictor.predict_match(
             championship=m.championship,
             home_team=m.home_team,
@@ -134,7 +136,7 @@ async def _seed_from_mock(state: AppState, hub: WebSocketHub) -> None:
             status=m.status,
             context=context0,
         )
-        m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+        m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
         m.update(next_update_unix=orchestrator.compute_next_update_unix(m, now_unix=now0))
         await state.upsert_match(m)
         await hub.broadcast(
@@ -167,6 +169,8 @@ async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
     for m in seed_matches:
         context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
         context0.update(orchestrator.smart_update_context(m, now_unix=now0))
+        if m.matchday is not None:
+            context0["matchday"] = int(m.matchday)
         result0 = predictor.predict_match(
             championship=m.championship,
             home_team=m.home_team,
@@ -174,7 +178,7 @@ async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
             status=m.status,
             context=context0,
         )
-        m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain})
+        m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
         m.update(next_update_unix=orchestrator.compute_next_update_unix(m, now_unix=now0))
         await state.upsert_match(m)
         await hub.broadcast(
@@ -486,6 +490,8 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
             context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
             context0.update(orchestrator.smart_update_context(m, now_unix=now0))
             context0["source"] = {"provider": "api_football", "fixture_id": fixture_id, "league_id": league_id, "season": season}
+            if m.matchday is not None:
+                context0["matchday"] = int(m.matchday)
             if st == "FINISHED":
                 hg = goals.get("home")
                 ag = goals.get("away")
@@ -501,8 +507,15 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
                     status=m.status,
                     context=context0,
                 )
-                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
+                calibrated = False
+                if isinstance(result0.explain, dict):
+                    ec = result0.explain.get("ensemble_components")
+                    if isinstance(ec, dict):
+                        calibrated = bool(ec.get("calibrated"))
+                probs = dict(result0.probabilities or {})
+                if not calibrated:
+                    probs = _calibrate_probs(probs, alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -706,6 +719,8 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
             context0: dict[str, Any] = {"ts_utc": datetime.fromtimestamp(now0, tz=timezone.utc).isoformat()}
             context0.update(orchestrator.smart_update_context(m, now_unix=now0))
             context0["source"] = {"provider": "football_data", "competition": code, "match_id": match_pk}
+            if m.matchday is not None:
+                context0["matchday"] = int(m.matchday)
             context0["calibration"] = {"alpha": float(alpha)}
 
             if st == "FINISHED":
@@ -724,8 +739,15 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
                     context=context0,
                 )
-                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
+                calibrated = False
+                if isinstance(result0.explain, dict):
+                    ec = result0.explain.get("ensemble_components")
+                    if isinstance(ec, dict):
+                        calibrated = bool(ec.get("calibrated"))
+                probs = dict(result0.probabilities or {})
+                if not calibrated:
+                    probs = _calibrate_probs(probs, alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -799,6 +821,8 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
             context0.update(orchestrator.smart_update_context(m, now_unix=now0))
             if isinstance(f.source, dict):
                 context0["source"] = dict(f.source)
+            if m.matchday is not None:
+                context0["matchday"] = int(m.matchday)
             if f.final_score is not None:
                 context0["final_score"] = dict(f.final_score)
             context0["calibration"] = {"alpha": float(alpha)}
@@ -811,8 +835,15 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
                     context=context0,
                 )
-                probs = _calibrate_probs(dict(result0.probabilities or {}), alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain})
+                calibrated = False
+                if isinstance(result0.explain, dict):
+                    ec = result0.explain.get("ensemble_components")
+                    if isinstance(ec, dict):
+                        calibrated = bool(ec.get("calibrated"))
+                probs = dict(result0.probabilities or {})
+                if not calibrated:
+                    probs = _calibrate_probs(probs, alpha)
+                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},

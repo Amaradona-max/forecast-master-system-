@@ -11,6 +11,8 @@ from api_gateway.app.settings import settings
 class PredictionResult:
     probabilities: dict[str, float]
     explain: dict[str, Any]
+    confidence: float | None = None
+    ranges: dict[str, Any] | None = None
 
 
 class PredictionService:
@@ -48,4 +50,10 @@ class PredictionService:
 
         s = sum(probs.values())
         probs = {k: v / s for k, v in probs.items()} if s > 0 else probs
-        return PredictionResult(probabilities=probs, explain=dict(raw.get("explain", {})))
+        conf = raw.get("confidence_score")
+        if not isinstance(conf, (int, float)):
+            conf = None
+        ranges = raw.get("ranges")
+        if not isinstance(ranges, dict):
+            ranges = None
+        return PredictionResult(probabilities=probs, explain=dict(raw.get("explain", {})), confidence=float(conf) if conf is not None else None, ranges=ranges)

@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import math
+import os
+from functools import lru_cache
+from typing import Any
+
+import joblib
+
+
+def _default_artifact_dir() -> str:
+    return os.getenv("ARTIFACT_DIR", "data/models")
+
+
+def _joblib_load(path: str) -> Any:
+    return joblib.load(path)
+
+
+@lru_cache(maxsize=32)
+def load_calibrator(championship: str) -> dict[str, Any] | None:
+    artifact_dir = _default_artifact_dir()
+    path = os.path.join(artifact_dir, f"calibrator_1x2_{championship}.joblib")
+    if not os.path.exists(path):
+        return None
+    try:
+        payload = _joblib_load(path)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def calibrate_1x2(*, championship: str, probs: dict[str, float]) -> tuple[dict[str, float], bool]:
+    calib = load_calibrator(championship)
+    if calib is None:
+        return probs, False
+
+    params = calib.get("params")
+    if not isinstance(params, dict):
+        return probs, False
+
+    p_h = float(probs.get("home_win", 0.0) or 0.0)
+    p_d = float(probs.get("draw", 0.0) or 0.0)
+    p_a = float(probs.get("away_win", 0.0) or 0.0)
+    s = max(p_h, 0.0) + max(p_d, 0.0) + max(p_a, 0.0)
+    if s <= 0:
+        p_h, p_d, p_a = 1 / 3, 1 / 3, 1 / 3
+    else:
+        p_h, p_d, p_a = max(p_h, 0.0) / s, max(p_d, 0.0) / s, max(p_a, 0.0) / s
+
+    def logit(p: float) -> float:
+        p = 1e-6 if p < 1e-6 else (1.0 - 1e-6 if p > 1.0 - 1e-6 else p)
+        return math.log(p / (1.0 - p))
+
+    def sigmoid(x: float) -> float:
+        if x < -60:
+            return 0.0
+        if x > 60:
+            x = 60
+        return 1.0 / (1.0 + math.exp(-x))
+
+    def apply_one(key: str, p: float) -> float:
+        row = params.get(key)
+        if not isinstance(row, dict):
+            return p
+        coef = row.get("coef")
+        intercept = row.get("intercept")
+        if not isinstance(coef, (int, float)) or not isinstance(intercept, (int, float)):
+            return p
+        z = float(coef) * logit(p) + float(intercept)
+        return sigmoid(z)
+
+    ph2 = apply_one("H", p_h)
+    pd2 = apply_one("D", p_d)
+    pa2 = apply_one("A", p_a)
+    s2 = max(ph2, 0.0) + max(pd2, 0.0) + max(pa2, 0.0)
+    if s2 <= 0:
+        return {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}, True
+    return {"home_win": max(ph2, 0.0) / s2, "draw": max(pd2, 0.0) / s2, "away_win": max(pa2, 0.0) / s2}, True
+

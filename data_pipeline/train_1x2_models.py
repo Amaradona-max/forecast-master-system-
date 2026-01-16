@@ -49,6 +49,16 @@ CALENDAR_SHEETS: dict[str, str] = {
 }
 
 
+def _resolve_input_path(*, base_dir: Path, filename: str) -> Path:
+    p0 = (base_dir / filename).resolve()
+    if p0.exists():
+        return p0
+    p1 = (base_dir.parent / filename).resolve()
+    if p1.exists():
+        return p1
+    return p0
+
+
 def _safe_season_year(v: Any) -> int | None:
     s = str(v or "").strip()
     if not s:
@@ -69,6 +79,28 @@ def _brier_multiclass(y_true: np.ndarray, proba: np.ndarray, labels: list[str]) 
         if lab in idx:
             y[r, idx[lab]] = 1.0
     return float(np.mean(np.sum((proba - y) ** 2, axis=1)))
+
+
+def _logit(p: np.ndarray) -> np.ndarray:
+    p2 = np.clip(p.astype(float), 1e-6, 1.0 - 1e-6)
+    return np.log(p2 / (1.0 - p2))
+
+
+def _fit_platt_ovr(*, y_true: np.ndarray, proba: np.ndarray, labels: list[str]) -> dict[str, Any]:
+    params: dict[str, dict[str, float]] = {}
+    for i, lab in enumerate(labels):
+        if i >= proba.shape[1]:
+            continue
+        y = (y_true == lab).astype(int)
+        if int(y.sum()) == 0 or int(y.sum()) == int(len(y)):
+            continue
+        x = _logit(proba[:, i]).reshape(-1, 1)
+        clf = LogisticRegression(max_iter=1000)
+        clf.fit(x, y)
+        coef = float(clf.coef_[0][0]) if hasattr(clf, "coef_") else 1.0
+        intercept = float(clf.intercept_[0]) if hasattr(clf, "intercept_") else 0.0
+        params[str(lab)] = {"coef": coef, "intercept": intercept}
+    return {"method": "platt_ovr", "params": params, "labels": list(labels)}
 
 
 def _points_for_result(ftr: str) -> tuple[int, int]:
@@ -212,7 +244,7 @@ def _load_league_xlsx(path: Path) -> pd.DataFrame:
 
 
 def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split_ratio: float) -> dict[str, Any]:
-    src = (base_dir / league.source_xlsx).resolve()
+    src = _resolve_input_path(base_dir=base_dir, filename=league.source_xlsx)
     df0 = _load_league_xlsx(src)
     df = _build_features(df0, window=5)
 
@@ -259,6 +291,8 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / f"model_1x2_{league.championship}.joblib"
     metrics_path = out_dir / f"metrics_1x2_{league.championship}.json"
+    calibrator_path = out_dir / f"calibrator_1x2_{league.championship}.joblib"
+    calibrator_path = out_dir / f"calibrator_1x2_{league.championship}.joblib"
 
     joblib.dump(
         {
@@ -270,6 +304,16 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
         model_path,
     )
 
+    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    joblib.dump(
+        {
+            "championship": league.championship,
+            "generated_at_utc": datetime.utcnow().isoformat(),
+            **calibrator,
+        },
+        calibrator_path,
+    )
+
     payload = {
         "championship": league.championship,
         "source": str(src),
@@ -277,6 +321,12 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
         "split_ratio": float(split_ratio),
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
+        "log_loss": ll,
+        "brier_score": brier,
+        "accuracy_1x2": acc,
+        "samples_train": int(len(X_train)),
+        "samples_calibrate": int(len(X_test)),
+        "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
@@ -366,7 +416,7 @@ def train_one_league_local_calendar(
     split_ratio: float,
     season_label: str,
 ) -> dict[str, Any]:
-    hist_src = (base_dir / league.source_xlsx).resolve()
+    hist_src = _resolve_input_path(base_dir=base_dir, filename=league.source_xlsx)
     hist = _load_league_xlsx(hist_src)
     cal = _calendar_rows_to_df(calendar_path=calendar_path, championship=league.championship, season_label=season_label)
     df0 = pd.concat([hist, cal], ignore_index=True)
@@ -447,6 +497,16 @@ def train_one_league_local_calendar(
         model_path,
     )
 
+    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    joblib.dump(
+        {
+            "championship": league.championship,
+            "generated_at_utc": datetime.utcnow().isoformat(),
+            **calibrator,
+        },
+        calibrator_path,
+    )
+
     payload = {
         "championship": league.championship,
         "source": str(calendar_path.resolve()),
@@ -454,6 +514,12 @@ def train_one_league_local_calendar(
         "split_ratio": float(split_ratio),
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
+        "log_loss": ll,
+        "brier_score": brier,
+        "accuracy_1x2": acc,
+        "samples_train": int(len(X_train)),
+        "samples_calibrate": int(len(X_test)),
+        "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
@@ -524,6 +590,7 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / f"model_1x2_{championship}.joblib"
     metrics_path = out_dir / f"metrics_1x2_{championship}.json"
+    calibrator_path = out_dir / f"calibrator_1x2_{championship}.joblib"
 
     joblib.dump(
         {
@@ -535,6 +602,16 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
         model_path,
     )
 
+    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    joblib.dump(
+        {
+            "championship": championship,
+            "generated_at_utc": datetime.utcnow().isoformat(),
+            **calibrator,
+        },
+        calibrator_path,
+    )
+
     payload = {
         "championship": championship,
         "source": str(csv_path.resolve()),
@@ -542,6 +619,12 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
         "split_ratio": float(split_ratio),
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
+        "log_loss": ll,
+        "brier_score": brier,
+        "accuracy_1x2": acc,
+        "samples_train": int(len(X_train)),
+        "samples_calibrate": int(len(X_test)),
+        "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
@@ -569,7 +652,7 @@ def main() -> None:
 
     all_metrics: dict[str, Any] = {"generated_at_utc": datetime.utcnow().isoformat(), "leagues": {}}
     if str(args.source) == "local_calendar":
-        calendar_path = (base_dir / str(args.calendar_file)).resolve()
+        calendar_path = _resolve_input_path(base_dir=base_dir, filename=str(args.calendar_file))
         for league in LEAGUES:
             row = train_one_league_local_calendar(
                 league=league,
