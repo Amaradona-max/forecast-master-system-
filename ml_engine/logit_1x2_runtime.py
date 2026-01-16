@@ -7,13 +7,15 @@ from typing import Any
 import joblib
 import numpy as np
 
+from ml_engine.resilience.circuit_breaker import CircuitOpenError, get_breaker
+
 
 def _default_artifact_dir() -> str:
     return os.getenv("ARTIFACT_DIR", "data/models")
 
 
 def _joblib_load(path: str) -> Any:
-    return joblib.load(path)
+    return get_breaker("artifacts").call(joblib.load, path)
 
 
 @lru_cache(maxsize=32)
@@ -23,6 +25,8 @@ def _load_model_cached(championship: str, artifact_dir: str) -> dict[str, Any] |
         return None
     try:
         payload = _joblib_load(path)
+    except CircuitOpenError:
+        return None
     except Exception:
         return None
     if not isinstance(payload, dict):

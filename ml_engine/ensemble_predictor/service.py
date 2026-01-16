@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import Any
 
 from ml_engine.calibration_1x2 import calibrate_1x2
 from ml_engine.dixon_coles_enhanced import dixon_coles_1x2
+from ml_engine.features.builder import build_features_1x2
 from ml_engine.logit_1x2_runtime import predict_1x2
 from ml_engine.poisson_goal_model import match_probabilities
 from ml_engine.performance_targets import CHAMPIONSHIP_TARGETS
+from ml_engine.safety.safe_mode import get_safe_mode
 from ml_engine.team_ratings_store import get_team_strength
+from ml_engine.config import monitoring_dir
 
 
 class EnsemblePredictorService:
@@ -50,6 +55,7 @@ class EnsemblePredictorService:
 
         matchday = context.get("matchday")
         md: int | None = int(matchday) if isinstance(matchday, int) else None
+        safe = get_safe_mode(championship)
 
         if status == "LIVE":
             w_base, w_poi, w_dc, w_logit = 0.20, 0.50, 0.25, 0.05
@@ -67,33 +73,9 @@ class EnsemblePredictorService:
                 w_poi = (1.0 - t) * 0.25 + t * 0.35
                 w_dc = (1.0 - t) * 0.20 + t * 0.25
 
-        logit_features: dict[str, Any] = {
-            "home_elo_pre": float(home_lookup.meta.get("elo")) if (home_lookup is not None and isinstance(home_lookup.meta.get("elo"), (int, float))) else float("nan"),
-            "away_elo_pre": float(away_lookup.meta.get("elo")) if (away_lookup is not None and isinstance(away_lookup.meta.get("elo"), (int, float))) else float("nan"),
-            "home_days_rest": context.get("home_days_rest", context.get("rest_days_home")),
-            "away_days_rest": context.get("away_days_rest", context.get("rest_days_away")),
-            "season_year": context.get("season_year"),
-            "month": context.get("month"),
-            "weekday": context.get("weekday"),
-            "home_pts_last5": context.get("home_pts_last5"),
-            "away_pts_last5": context.get("away_pts_last5"),
-            "home_gf_last5": context.get("home_gf_last5"),
-            "home_ga_last5": context.get("home_ga_last5"),
-            "away_gf_last5": context.get("away_gf_last5"),
-            "away_ga_last5": context.get("away_ga_last5"),
-        }
-        he = logit_features.get("home_elo_pre")
-        ae = logit_features.get("away_elo_pre")
-        if isinstance(he, (int, float)) and isinstance(ae, (int, float)) and math.isfinite(float(he)) and math.isfinite(float(ae)):
-            logit_features["elo_diff"] = float(he) - float(ae)
-        else:
-            logit_features["elo_diff"] = float("nan")
-        rh = logit_features.get("home_days_rest")
-        ra = logit_features.get("away_days_rest")
-        if isinstance(rh, (int, float)) and isinstance(ra, (int, float)) and math.isfinite(float(rh)) and math.isfinite(float(ra)):
-            logit_features["rest_diff"] = float(rh) - float(ra)
-        else:
-            logit_features["rest_diff"] = float("nan")
+        home_elo = home_lookup.meta.get("elo") if home_lookup is not None else None
+        away_elo = away_lookup.meta.get("elo") if away_lookup is not None else None
+        logit_features, missing_flags, feature_version = build_features_1x2(home_elo=home_elo, away_elo=away_elo, context=context)
 
         logit = predict_1x2(championship=championship, features=logit_features)
         logit_available = isinstance(logit, dict)
@@ -151,6 +133,8 @@ class EnsemblePredictorService:
                 m_cap = 6
             early_bonus = _clamp((float(m_cap) - float(md)) / float(m_cap), 0.0, 1.0) * 0.05
             shrink = _clamp(shrink + early_bonus, 0.0, 0.95)
+        if bool(safe.enabled) and shrink < 0.40:
+            shrink = _clamp(shrink + 0.08, 0.0, 0.40)
         if shrink > 0:
             u = 1.0 / 3.0
             p_home = (1.0 - shrink) * p_home + shrink * u
@@ -173,20 +157,29 @@ class EnsemblePredictorService:
         margin = _margin({"home_win": p_home, "draw": p_draw, "away_win": p_away})
         confidence_raw = margin * (1.0 - var_ensemble) * data_quality
         confidence_score = _clamp(confidence_raw / 0.60, 0.0, 1.0)
-        if confidence_score >= 0.70:
+        hi_thr, med_thr = _confidence_thresholds(championship=championship)
+        if confidence_score >= hi_thr:
             confidence_label = "HIGH"
-        elif confidence_score >= 0.40:
+        elif confidence_score >= med_thr:
             confidence_label = "MEDIUM"
         else:
             confidence_label = "LOW"
+        if bool(safe.enabled) and confidence_label == "HIGH":
+            confidence_label = "MEDIUM"
 
         ranges = _probability_ranges(
             probs={"home_win": p_home, "draw": p_draw, "away_win": p_away},
             var_ensemble=var_ensemble,
             data_quality=data_quality,
         )
+        if bool(safe.enabled):
+            ranges = _widen_ranges(probs={"home_win": p_home, "draw": p_draw, "away_win": p_away}, ranges=ranges, factor=1.15)
 
         explain = {
+            "feature_version": str(feature_version),
+            "missing_flags": dict(missing_flags),
+            "safe_mode": bool(safe.enabled),
+            "safe_mode_reason": safe.reason,
             "championship_key_features": list(target.get("key_features", [])),
             "components": {
                 "team_strength_delta": float(home_base - away_base),
@@ -232,6 +225,9 @@ class EnsemblePredictorService:
             "confidence": {"score": float(confidence_score), "label": str(confidence_label)},
             "confidence_score": float(confidence_score),
             "confidence_label": str(confidence_label),
+            "feature_version": str(feature_version),
+            "safe_mode": bool(safe.enabled),
+            "safe_mode_reason": safe.reason,
             "explain": explain,
         }
 
@@ -325,4 +321,61 @@ def _probability_ranges(*, probs: dict[str, float], var_ensemble: float, data_qu
         lo = _clamp(p - k * vol, 0.03, 0.90)
         hi = _clamp(p + k * vol, 0.03, 0.90)
         out[key] = {"lo": float(lo), "hi": float(hi)}
+    return out
+
+
+_CONF_CACHE: dict[str, Any] = {"path": None, "mtime_ns": None, "data": {}}
+
+
+def _confidence_thresholds(*, championship: str) -> tuple[float, float]:
+    p = Path(monitoring_dir() / f"conf_thresholds_{championship}.json")
+    try:
+        st = p.stat()
+    except Exception:
+        return 0.70, 0.40
+    if _CONF_CACHE.get("path") != str(p) or _CONF_CACHE.get("mtime_ns") != st.st_mtime_ns:
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            raw = None
+        if isinstance(raw, dict):
+            _CONF_CACHE.update({"path": str(p), "mtime_ns": st.st_mtime_ns, "data": raw})
+        else:
+            _CONF_CACHE.update({"path": str(p), "mtime_ns": st.st_mtime_ns, "data": {}})
+    data = _CONF_CACHE.get("data")
+    if not isinstance(data, dict):
+        return 0.70, 0.40
+    hi = data.get("high")
+    med = data.get("med")
+    try:
+        hi_f = float(hi)
+    except Exception:
+        hi_f = 0.70
+    try:
+        med_f = float(med)
+    except Exception:
+        med_f = 0.40
+    if hi_f < 0.05 or hi_f > 0.95:
+        hi_f = 0.70
+    if med_f < 0.05 or med_f > 0.95 or med_f >= hi_f:
+        med_f = 0.40
+    return hi_f, med_f
+
+
+def _widen_ranges(*, probs: dict[str, float], ranges: dict[str, dict[str, float]], factor: float) -> dict[str, dict[str, float]]:
+    f = float(factor)
+    if f <= 1.0:
+        return ranges
+    out: dict[str, dict[str, float]] = {}
+    for k in ("home_win", "draw", "away_win"):
+        r = ranges.get(k, {})
+        lo0 = float(r.get("lo", 0.03) or 0.03)
+        hi0 = float(r.get("hi", 0.90) or 0.90)
+        p = float(probs.get(k, 1 / 3) or 1 / 3)
+        w = max(hi0 - lo0, 0.0) * f
+        lo = _clamp(p - 0.5 * w, 0.03, 0.90)
+        hi = _clamp(p + 0.5 * w, 0.03, 0.90)
+        if hi < lo:
+            lo, hi = hi, lo
+        out[k] = {"lo": float(lo), "hi": float(hi)}
     return out

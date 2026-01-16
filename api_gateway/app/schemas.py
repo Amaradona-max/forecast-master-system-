@@ -10,10 +10,10 @@ Championship = Literal["serie_a", "premier_league", "la_liga", "bundesliga", "el
 
 
 class MatchInput(BaseModel):
-    match_id: str = Field(min_length=1)
+    match_id: str = Field(min_length=1, max_length=160)
     championship: Championship
-    home_team: str = Field(min_length=1)
-    away_team: str = Field(min_length=1)
+    home_team: str = Field(min_length=1, max_length=80)
+    away_team: str = Field(min_length=1, max_length=80)
     kickoff_utc: datetime | None = None
     context: dict[str, Any] = Field(default_factory=dict)
 
@@ -58,6 +58,35 @@ class SeasonAccuracyPoint(BaseModel):
 class SeasonAccuracyResponse(BaseModel):
     championship: Championship | Literal["all"]
     points: list[SeasonAccuracyPoint]
+
+
+class CalibrationBin(BaseModel):
+    bin_lo: float
+    bin_hi: float
+    predicted_avg: float
+    observed_rate: float
+    count: int
+
+
+class CalibrationWindowMetrics(BaseModel):
+    window: int | Literal["season"]
+    n: int
+    log_loss: float
+    brier: float
+    ece: float
+    bins: list[CalibrationBin] = Field(default_factory=list)
+
+
+class CalibrationMetricsResponse(BaseModel):
+    championship: Championship
+    metrics: CalibrationWindowMetrics
+
+
+class CalibrationSummaryResponse(BaseModel):
+    championship: Championship
+    last_50: CalibrationWindowMetrics
+    last_200: CalibrationWindowMetrics
+    season_to_date: CalibrationWindowMetrics
 
 
 class OverviewMatch(BaseModel):

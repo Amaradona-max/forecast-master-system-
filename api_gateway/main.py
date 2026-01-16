@@ -22,7 +22,13 @@ from api_gateway.app.services import PredictionService
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState, LiveMatchState
 from api_gateway.app.ws import LiveUpdateEvent, WebSocketHub
+from api_gateway.middleware.rate_limit import rate_limit_middleware
+from api_gateway.middleware.request_limits import request_limits_middleware
 from api_gateway.routes import accuracy, live, overview, predictions, system_admin
+from ml_engine.cache.sqlite_cache import SqliteCache, recover_corrupt_sqlite_db
+from ml_engine.config import cache_db_path
+from ml_engine.resilience.bulkheads import run_cpu
+from ml_engine.resilience.timeouts import default_deadline_ms, reset_deadline, set_deadline_ms
 
 
 app = FastAPI(title=settings.app_name)
@@ -36,11 +42,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def _request_limits_middleware(request, call_next):
+    return await request_limits_middleware(request, call_next)
+
+@app.middleware("http")
+async def _rate_limit_middleware(request, call_next):
+    return await rate_limit_middleware(request, call_next)
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    t0 = time.perf_counter()
+    resp = await call_next(request)
+    dt_ms = (time.perf_counter() - t0) * 1000.0
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    route = str(getattr(request.url, "path", "") or "")
+    is_err = bool(int(getattr(resp, "status_code", 500) or 500) >= 400)
+    hits = resp.headers.get("x-cache-hits")
+    misses = resp.headers.get("x-cache-misses")
+    try:
+        h = int(hits) if hits is not None else 0
+    except Exception:
+        h = 0
+    try:
+        m = int(misses) if misses is not None else 0
+    except Exception:
+        m = 0
+    try:
+        SqliteCache(db_path=cache_db_path()).incr_runtime_metrics(day=day, route=route, latency_ms=float(dt_ms), is_error=is_err, cache_hits=h, cache_misses=m)
+    except Exception:
+        pass
+    return resp
+
 app.include_router(predictions.router)
 app.include_router(live.router)
 app.include_router(accuracy.router)
 app.include_router(overview.router)
 app.include_router(system_admin.router)
+
+
+async def _run_cpu_with_deadline(fn, /, *args: Any, **kwargs: Any):
+    tok = set_deadline_ms(default_deadline_ms())
+    try:
+        return await run_cpu(fn, *args, **kwargs)
+    finally:
+        reset_deadline(tok)
 
 
 def _effective_data_provider() -> str:
@@ -80,6 +126,13 @@ def _calibrate_probs(probs: dict[str, float], alpha: float) -> dict[str, float]:
 async def startup() -> None:
     app.state.app_state = AppState()
     app.state.ws_hub = WebSocketHub()
+    try:
+        ok = bool(SqliteCache(db_path=cache_db_path()).quick_check())
+    except Exception:
+        ok = False
+    if not ok:
+        with contextlib.suppress(Exception):
+            recover_corrupt_sqlite_db(db_path=cache_db_path())
     provider = _effective_data_provider()
     if settings.real_data_only and provider == "mock":
         app.state.data_error = "real_data_provider_required"
@@ -129,11 +182,14 @@ async def _seed_from_mock(state: AppState, hub: WebSocketHub) -> None:
         context0.update(orchestrator.smart_update_context(m, now_unix=now0))
         if m.matchday is not None:
             context0["matchday"] = int(m.matchday)
-        result0 = predictor.predict_match(
+        result0 = await _run_cpu_with_deadline(
+            predictor.predict_match,
             championship=m.championship,
+            match_id=m.match_id,
             home_team=m.home_team,
             away_team=m.away_team,
             status=m.status,
+            kickoff_unix=m.kickoff_unix,
             context=context0,
         )
         m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
@@ -171,11 +227,14 @@ async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
         context0.update(orchestrator.smart_update_context(m, now_unix=now0))
         if m.matchday is not None:
             context0["matchday"] = int(m.matchday)
-        result0 = predictor.predict_match(
+        result0 = await _run_cpu_with_deadline(
+            predictor.predict_match,
             championship=m.championship,
+            match_id=m.match_id,
             home_team=m.home_team,
             away_team=m.away_team,
             status=m.status,
+            kickoff_unix=m.kickoff_unix,
             context=context0,
         )
         m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
@@ -210,11 +269,14 @@ async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
             if status == "LIVE":
                 context["events"] = _random_events(rng)
             context.update(orchestrator.smart_update_context(m, now_unix=now_unix))
-            result = predictor.predict_match(
+            result = await _run_cpu_with_deadline(
+                predictor.predict_match,
                 championship=m.championship,
+                match_id=m.match_id,
                 home_team=m.home_team,
                 away_team=m.away_team,
                 status=status,
+                kickoff_unix=m.kickoff_unix,
                 context=context,
             )
             meta = {"context": context, "explain": result.explain}
@@ -500,22 +562,17 @@ async def _seed_from_api_football(state: AppState, hub: WebSocketHub) -> None:
             context0["calibration"] = {"alpha": float(alpha)}
 
             try:
-                result0 = predictor.predict_match(
+                result0 = await _run_cpu_with_deadline(
+                    predictor.predict_match,
                     championship=m.championship,
+                    match_id=m.match_id,
                     home_team=m.home_team,
                     away_team=m.away_team,
                     status=m.status,
+                    kickoff_unix=m.kickoff_unix,
                     context=context0,
                 )
-                calibrated = False
-                if isinstance(result0.explain, dict):
-                    ec = result0.explain.get("ensemble_components")
-                    if isinstance(ec, dict):
-                        calibrated = bool(ec.get("calibrated"))
-                probs = dict(result0.probabilities or {})
-                if not calibrated:
-                    probs = _calibrate_probs(probs, alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
+                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -732,22 +789,17 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     context0["final_score"] = {"home": int(hg), "away": int(ag)}
 
             try:
-                result0 = predictor.predict_match(
+                result0 = await _run_cpu_with_deadline(
+                    predictor.predict_match,
                     championship=m.championship,
+                    match_id=m.match_id,
                     home_team=m.home_team,
                     away_team=m.away_team,
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
+                    kickoff_unix=m.kickoff_unix,
                     context=context0,
                 )
-                calibrated = False
-                if isinstance(result0.explain, dict):
-                    ec = result0.explain.get("ensemble_components")
-                    if isinstance(ec, dict):
-                        calibrated = bool(ec.get("calibrated"))
-                probs = dict(result0.probabilities or {})
-                if not calibrated:
-                    probs = _calibrate_probs(probs, alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
+                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
@@ -828,22 +880,17 @@ async def _seed_from_local_files(state: AppState, hub: WebSocketHub) -> None:
             context0["calibration"] = {"alpha": float(alpha)}
 
             try:
-                result0 = predictor.predict_match(
+                result0 = await _run_cpu_with_deadline(
+                    predictor.predict_match,
                     championship=m.championship,
+                    match_id=m.match_id,
                     home_team=m.home_team,
                     away_team=m.away_team,
                     status="PREMATCH" if m.status == "FINISHED" else m.status,
+                    kickoff_unix=m.kickoff_unix,
                     context=context0,
                 )
-                calibrated = False
-                if isinstance(result0.explain, dict):
-                    ec = result0.explain.get("ensemble_components")
-                    if isinstance(ec, dict):
-                        calibrated = bool(ec.get("calibrated"))
-                probs = dict(result0.probabilities or {})
-                if not calibrated:
-                    probs = _calibrate_probs(probs, alpha)
-                m.update(probabilities=probs, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
+                m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
