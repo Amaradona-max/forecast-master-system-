@@ -12,9 +12,6 @@ jobs:
     env:
       ARTIFACT_DIR: data/models
       STRICT_CALIBRATOR: "0"
-    defaults:
-      run:
-        working-directory: forecast-master-system
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,4 +38,3 @@ jobs:
       - name: Smoke invariants
         run: |
           python scripts/check_invariants_smoke.py
-
