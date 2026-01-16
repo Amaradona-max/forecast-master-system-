@@ -17,8 +17,7 @@ def _joblib_load(path: str) -> Any:
 
 
 @lru_cache(maxsize=32)
-def load_model(championship: str) -> dict[str, Any] | None:
-    artifact_dir = _default_artifact_dir()
+def _load_model_cached(championship: str, artifact_dir: str) -> dict[str, Any] | None:
     path = os.path.join(artifact_dir, f"model_1x2_{championship}.joblib")
     if not os.path.exists(path):
         return None
@@ -31,6 +30,13 @@ def load_model(championship: str) -> dict[str, Any] | None:
     if "pipeline" not in payload or "feature_cols" not in payload:
         return None
     return payload
+
+
+def load_model(championship: str) -> dict[str, Any] | None:
+    return _load_model_cached(championship, _default_artifact_dir())
+
+
+load_model.cache_clear = _load_model_cached.cache_clear  # type: ignore[attr-defined]
 
 
 def predict_1x2(*, championship: str, features: dict[str, Any]) -> dict[str, float] | None:

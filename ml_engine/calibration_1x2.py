@@ -17,8 +17,7 @@ def _joblib_load(path: str) -> Any:
 
 
 @lru_cache(maxsize=32)
-def load_calibrator(championship: str) -> dict[str, Any] | None:
-    artifact_dir = _default_artifact_dir()
+def _load_calibrator_cached(championship: str, artifact_dir: str) -> dict[str, Any] | None:
     path = os.path.join(artifact_dir, f"calibrator_1x2_{championship}.joblib")
     if not os.path.exists(path):
         return None
@@ -27,6 +26,13 @@ def load_calibrator(championship: str) -> dict[str, Any] | None:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def load_calibrator(championship: str) -> dict[str, Any] | None:
+    return _load_calibrator_cached(championship, _default_artifact_dir())
+
+
+load_calibrator.cache_clear = _load_calibrator_cached.cache_clear  # type: ignore[attr-defined]
 
 
 def calibrate_1x2(*, championship: str, probs: dict[str, float]) -> tuple[dict[str, float], bool]:
@@ -76,4 +82,3 @@ def calibrate_1x2(*, championship: str, probs: dict[str, float]) -> tuple[dict[s
     if s2 <= 0:
         return {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}, True
     return {"home_win": max(ph2, 0.0) / s2, "draw": max(pd2, 0.0) / s2, "away_win": max(pa2, 0.0) / s2}, True
-
