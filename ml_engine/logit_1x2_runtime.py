@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import math
 import os
 from functools import lru_cache
 from typing import Any
 
 import joblib
-import numpy as np
 
 from ml_engine.resilience.circuit_breaker import CircuitOpenError, get_breaker
 
@@ -16,6 +16,13 @@ def _default_artifact_dir() -> str:
 
 def _joblib_load(path: str) -> Any:
     return get_breaker("artifacts").call(joblib.load, path)
+
+
+def _is_finite_number(v: Any) -> bool:
+    try:
+        return math.isfinite(float(v))
+    except Exception:
+        return False
 
 
 @lru_cache(maxsize=32)
@@ -57,39 +64,45 @@ def predict_1x2(*, championship: str, features: dict[str, Any]) -> dict[str, flo
     cols = [str(c) for c in feature_cols]
     for col in cols:
         v = features.get(col)
-        if isinstance(v, (int, float)) and np.isfinite(v):
+        if isinstance(v, (int, float)) and _is_finite_number(v):
             row.append(float(v))
         else:
             row.append(float("nan"))
     try:
-        import pandas as pd
+        import numpy as np  # type: ignore[import-not-found]
 
-        X: Any = pd.DataFrame([row], columns=cols)
+        X: Any = np.asarray([row], dtype=float)
     except Exception:
-        X = np.asarray([row], dtype=float)
+        X = [row]
 
     try:
         proba = pipe.predict_proba(X)
     except Exception:
         return None
-    if not isinstance(proba, np.ndarray) or proba.ndim != 2 or proba.shape[0] != 1:
+    if not hasattr(proba, "__len__") or len(proba) != 1:
+        return None
+    row0 = proba[0]
+    if not hasattr(row0, "__len__"):
         return None
 
     classes = getattr(pipe, "classes_", None)
-    if not isinstance(classes, (list, tuple, np.ndarray)):
+    if not isinstance(classes, (list, tuple)):
         clf = getattr(pipe, "named_steps", {}).get("clf") if hasattr(pipe, "named_steps") else None
         classes = getattr(clf, "classes_", None)
-    if not isinstance(classes, (list, tuple, np.ndarray)):
+    if not isinstance(classes, (list, tuple)):
         classes = payload.get("labels")
-    if not isinstance(classes, (list, tuple, np.ndarray)):
+    if not isinstance(classes, (list, tuple)):
         return None
 
     out: dict[str, float] = {"home_win": 0.0, "draw": 0.0, "away_win": 0.0}
     for i, c in enumerate(list(classes)):
-        if i >= proba.shape[1]:
+        if i >= len(row0):
             break
-        p = float(proba[0, i])
-        if not np.isfinite(p):
+        try:
+            p = float(row0[i])
+        except Exception:
+            p = 0.0
+        if not _is_finite_number(p):
             p = 0.0
         if str(c) == "H":
             out["home_win"] = p
