@@ -36,3 +36,4 @@ pnpm-debug.log*
 
 .vercel/
 .vercel_config/
+.vercel_home/
