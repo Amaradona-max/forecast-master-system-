@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from api_gateway.app.schemas import (
     CalibrationBin,
@@ -16,6 +17,40 @@ from api_gateway.app.schemas import (
 
 
 router = APIRouter()
+
+
+def _tenant_id_from_request(request: Request) -> str:
+    tid = request.headers.get("x-tenant-id")
+    if isinstance(tid, str) and tid.strip():
+        return tid.strip().lower()
+    qp = request.query_params.get("tenant") or request.query_params.get("tenant_id")
+    if isinstance(qp, str) and qp.strip():
+        return qp.strip().lower()
+    return "default"
+
+
+def _country_from_request(request: Request) -> str | None:
+    for k in ("cf-ipcountry", "x-country", "x-geo-country"):
+        v = request.headers.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return None
+
+
+def _apply_region_policy(request: Request, compliance: dict[str, Any]) -> None:
+    if not isinstance(compliance, dict):
+        return
+    cc = _country_from_request(request)
+    allow = compliance.get("allowed_countries")
+    block = compliance.get("blocked_countries")
+    allow_list = [str(x).strip().upper() for x in (allow if isinstance(allow, list) else []) if str(x).strip()]
+    block_list = [str(x).strip().upper() for x in (block if isinstance(block, list) else []) if str(x).strip()]
+    if cc is None:
+        return
+    if block_list and cc in set(block_list):
+        raise HTTPException(status_code=451, detail="region_blocked")
+    if allow_list and cc not in set(allow_list):
+        raise HTTPException(status_code=451, detail="region_not_allowed")
 
 def _safe_float(v: object) -> float | None:
     if isinstance(v, bool):
@@ -179,6 +214,12 @@ def _build_calibration_metrics(*, matches: list[object], championship: str, wind
 async def season_progress(request: Request, championship: str = "all") -> SeasonAccuracyResponse:
     now = datetime.now(timezone.utc)
     state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
     matches = await state.list_matches()
     points: list[SeasonAccuracyPoint] = []
     prev = (0.0, 0.0, 0.0, 0.0)
@@ -227,6 +268,12 @@ async def season_progress(request: Request, championship: str = "all") -> Season
 @router.get("/api/v1/accuracy/calibration", response_model=CalibrationMetricsResponse)
 async def calibration_metrics(request: Request, championship: str = "serie_a", window: int = 200) -> CalibrationMetricsResponse:
     state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
     matches = await state.list_matches()
     win = max(1, min(10000, int(window)))
     metrics = _build_calibration_metrics(matches=matches, championship=championship, window=win)
@@ -236,6 +283,12 @@ async def calibration_metrics(request: Request, championship: str = "serie_a", w
 @router.get("/api/v1/accuracy/calibration-summary", response_model=CalibrationSummaryResponse)
 async def calibration_summary(request: Request, championship: str = "serie_a") -> CalibrationSummaryResponse:
     state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
     matches = await state.list_matches()
     last_50 = _build_calibration_metrics(matches=matches, championship=championship, window=50)
     last_200 = _build_calibration_metrics(matches=matches, championship=championship, window=200)

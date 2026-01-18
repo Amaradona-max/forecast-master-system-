@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FORECAST_", env_file=".env", extra="ignore")
 
     app_name: str = "Forecast Master System API"
-    cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+    admin_token: str | None = None
+    cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000", "http://localhost:3001"]
     cors_allow_origin_regex: str | None = None
     simulate_live_updates: bool = True
     live_tick_seconds: int = 30

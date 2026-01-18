@@ -86,3 +86,75 @@ export type ExplainResponse = {
   why: string[]
   risks: string[]
 }
+
+export type MarketConfidence = {
+  probability: number
+  confidence: number
+  risk: string
+}
+
+export type MultiMarketConfidenceResponse = {
+  generated_at_utc: string
+  match_id: string
+  match: string
+  markets: Record<string, MarketConfidence>
+}
+
+export type UserProfile = {
+  user_id: string
+  profile: "PRUDENT" | "BALANCED" | "AGGRESSIVE"
+  bankroll_reference: number
+  preferred_markets: string[]
+  preferred_championships: string[]
+  notifications_enabled: boolean
+  notifications_min_confidence: "LOW" | "MEDIUM" | "HIGH"
+  updated_at_unix: number
+}
+
+export type UserProfileUpdate = Partial<Omit<UserProfile, "user_id" | "updated_at_unix">>
+
+export type TenantBranding = {
+  app_name: string
+  tagline?: string | null
+  logo_url?: string | null
+  primary_color?: string | null
+}
+
+export type TenantFilters = {
+  visible_championships: string[]
+  active_markets: string[]
+  min_confidence: "LOW" | "MEDIUM" | "HIGH"
+}
+
+export type TenantCompliance = {
+  disclaimer_text: string
+  educational_only: boolean
+  allowed_countries: string[]
+  blocked_countries: string[]
+}
+
+export type TenantFeatures = {
+  disabled_profiles: Array<"PRUDENT" | "BALANCED" | "AGGRESSIVE">
+}
+
+export type TenantConfig = {
+  tenant_id: string
+  branding: TenantBranding
+  filters: TenantFilters
+  compliance: TenantCompliance
+  features: TenantFeatures
+  updated_at_unix: number
+}
+
+export type SystemStatusResponse = {
+  data_provider: string
+  real_data_only: boolean
+  data_error?: string | null
+  matches_loaded: number
+  api_football_key_present: boolean
+  api_football_leagues_configured: number
+  api_football_seasons_configured: number
+  football_data_key_present: boolean
+  football_data_competitions_configured: number
+  now_utc: string
+}

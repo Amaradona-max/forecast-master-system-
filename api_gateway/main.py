@@ -104,8 +104,9 @@ async def _run_cpu_with_deadline(fn, /, *args: Any, **kwargs: Any):
 
 def _effective_data_provider() -> str:
     provider = str(getattr(settings, "data_provider", "") or "").strip()
-    if not settings.real_data_only and provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
-        return "football_data"
+    if not settings.real_data_only and provider == "api_football":
+        if not bool(getattr(settings, "api_football_key", None)) and bool(getattr(settings, "football_data_key", None)):
+            return "football_data"
     return provider
 
 
@@ -658,6 +659,7 @@ async def _seed_from_mock(state: AppState, hub: WebSocketHub) -> None:
                 },
             )
         )
+    app.state.data_error = None
 
 
 async def _simulate_live_updates(state: AppState, hub: WebSocketHub) -> None:
@@ -1089,6 +1091,9 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
     if isinstance(until, (int, float)) and float(until) > now0:
         app.state.data_error = "football_data_http_429:rate_limited"
         return
+    disabled_until = getattr(app.state, "_football_data_disabled_until", 0.0)
+    if isinstance(disabled_until, (int, float)) and float(disabled_until) > now0:
+        return
     days_back = int(getattr(settings, "fixtures_refresh_days_back", 3) or 3)
     raw_ahead = getattr(settings, "fixtures_refresh_days_ahead", 0)
     days_ahead = int(raw_ahead) if isinstance(raw_ahead, int) and int(raw_ahead) > 0 else int(getattr(settings, "fixtures_days_ahead", 90) or 90)
@@ -1152,6 +1157,13 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                     last_error = f"football_data_http_403:forbidden:{snippet}" if snippet else "football_data_http_403:forbidden"
                     app.state.data_error = last_error
                     return
+                elif code0 == 400:
+                    last_error = f"football_data_http_400:{snippet}" if snippet else "football_data_http_400"
+                    low = snippet.lower()
+                    if "token" in low and "invalid" in low:
+                        app.state._football_data_disabled_until = time.time() + 86400.0
+                        await _seed_from_mock(state, hub)
+                        return
                 elif code0 == 404:
                     last_error = f"football_data_http_404:not_found:{code}"
                 elif code0 == 429:
@@ -1324,6 +1336,9 @@ async def _seed_from_football_data_season(state: AppState, hub: WebSocketHub) ->
     if isinstance(until, (int, float)) and float(until) > now0:
         app.state.data_error = "football_data_http_429:rate_limited"
         return
+    disabled_until = getattr(app.state, "_football_data_disabled_until", 0.0)
+    if isinstance(disabled_until, (int, float)) and float(disabled_until) > now0:
+        return
 
     start_dt = _parse_utc_iso(str(getattr(settings, "fixtures_season_start_utc", "") or "")) or datetime(2025, 8, 1, tzinfo=timezone.utc)
     end_dt = _parse_utc_iso(str(getattr(settings, "fixtures_season_end_utc", "") or "")) or datetime(2026, 6, 30, 23, 59, 59, tzinfo=timezone.utc)
@@ -1378,6 +1393,13 @@ async def _seed_from_football_data_season(state: AppState, hub: WebSocketHub) ->
                     last_error = f"football_data_http_{code0}:{snippet}" if snippet else f"football_data_http_{code0}"
                     app.state.data_error = last_error
                     return
+                if code0 == 400:
+                    last_error = f"football_data_http_400:{snippet}" if snippet else "football_data_http_400"
+                    low = snippet.lower()
+                    if "token" in low and "invalid" in low:
+                        app.state._football_data_disabled_until = time.time() + 86400.0
+                        await _seed_from_mock(state, hub)
+                        return
                 if code0 == 429:
                     last_error = "football_data_http_429:rate_limited"
                     app.state._football_data_rate_limited_until = time.time() + 300.0

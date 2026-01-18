@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Line,
   LineChart,
@@ -10,8 +10,22 @@ import {
   YAxis
 } from "recharts"
 
-import type { ExplainResponse, TeamToPlay, TeamsToPlayResponse, TrackRecordResponse } from "@/components/api/types"
-import { apiUrl, fetchExplainMatch, fetchExplainTeam, fetchSeasonProgress, fetchTeamsToPlay, fetchTrackRecord, getApiBaseUrl } from "@/components/api/client"
+import type { ExplainResponse, MultiMarketConfidenceResponse, TeamToPlay, TeamsToPlayResponse, TenantConfig, TrackRecordResponse, UserProfile } from "@/components/api/types"
+import {
+  apiUrl,
+  fetchTenantConfig,
+  fetchSystemStatus,
+  fetchExplainMatch,
+  fetchExplainTeam,
+  fetchMultiMarketConfidence,
+  fetchSeasonProgress,
+  fetchTeamsToPlay,
+  fetchTrackRecord,
+  fetchUserProfile,
+  getApiBaseUrl,
+  getTenantId,
+  updateUserProfile
+} from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
 
 type OverviewMatch = {
@@ -77,6 +91,154 @@ function fmtSigned(x: number) {
   if (!Number.isFinite(n)) return "n/d"
   const s = n >= 0 ? "+" : ""
   return `${s}${n.toFixed(2)}`
+}
+
+function confidenceLabel(score: number) {
+  const v = clamp01(Number(score ?? 0))
+  if (v >= 0.7) return "HIGH"
+  if (v >= 0.4) return "MEDIUM"
+  return "LOW"
+}
+
+function confidenceRank(label: string) {
+  const v = String(label || "").toUpperCase()
+  if (v === "HIGH") return 2
+  if (v === "MEDIUM") return 1
+  return 0
+}
+
+function riskLevel(explain?: Record<string, unknown>) {
+  const e = (explain ?? {}) as Record<string, unknown>
+  const safeMode = Boolean(e.safe_mode)
+  const missing = e.missing_flags
+  const missingCount = Array.isArray(missing) ? missing.length : 0
+  return safeMode || missingCount > 0 ? "MEDIUM" : "LOW"
+}
+
+function marketDisplayName(key: string) {
+  const k = String(key || "").toUpperCase()
+  if (k === "OVER_2_5") return "Over 2.5"
+  if (k === "BTTS") return "BTTS"
+  if (k === "1X2") return "1X2"
+  return k || "Market"
+}
+
+function riskRank(risk: string) {
+  const r = String(risk || "").toUpperCase()
+  if (r === "LOW") return 2
+  if (r === "MEDIUM") return 1
+  return 0
+}
+
+function normalizeMarketKey(v: unknown) {
+  return String(v ?? "").trim().toUpperCase()
+}
+
+type MarketLite = { confidence: number; risk: string; probability?: number }
+
+function bestMarketKey(markets: Record<string, MarketLite>) {
+  const entries = Object.entries(markets ?? {})
+  if (!entries.length) return ""
+  entries.sort((a, b) => {
+    const ac = Number(a[1]?.confidence ?? 0)
+    const bc = Number(b[1]?.confidence ?? 0)
+    if (bc !== ac) return bc - ac
+    return riskRank(String(b[1]?.risk ?? "")) - riskRank(String(a[1]?.risk ?? ""))
+  })
+  return String(entries[0]?.[0] ?? "")
+}
+
+function isUnstableMarket(m: MarketLite) {
+  const c = Number(m?.confidence ?? 0)
+  const r = String(m?.risk ?? "").toUpperCase()
+  return r === "HIGH" || c < 45
+}
+
+type ProfileKey = "PRUDENT" | "BALANCED" | "AGGRESSIVE"
+
+function filterMarketsByTenant(markets: Record<string, MarketLite>, activeMarkets: unknown) {
+  const allow0 = Array.isArray(activeMarkets) ? activeMarkets : []
+  const allow = allow0.map((x) => normalizeMarketKey(x)).filter(Boolean)
+  if (!allow.length) return markets
+  const out: Record<string, MarketLite> = {}
+  for (const k of allow) {
+    const mk = markets[k]
+    if (mk) out[k] = mk
+  }
+  return out
+}
+
+function normalizeProfileKey(v: unknown): ProfileKey {
+  const s = String(v ?? "").trim().toUpperCase()
+  if (s === "PRUDENTE") return "PRUDENT"
+  if (s === "AGGRESSIVO") return "AGGRESSIVE"
+  if (s === "PRUDENT" || s === "BALANCED" || s === "AGGRESSIVE") return s
+  return "BALANCED"
+}
+
+function profileTooltip(p: ProfileKey) {
+  if (p === "PRUDENT") return "Mostra solo confidence alta e risk LOW. Stake ridotto."
+  if (p === "AGGRESSIVE") return "Include anche risk MEDIUM/HIGH. Stake più flessibile."
+  return "Default: confidence media-alta e risk LOW/MEDIUM."
+}
+
+function matchRisk(m: OverviewMatch) {
+  const conf = confidenceLabel(Number(m.confidence ?? 0))
+  const base = riskLevel(m.explain ?? undefined)
+  if (conf === "LOW") return "HIGH"
+  if (String(base).toUpperCase() === "MEDIUM") return "MEDIUM"
+  return "LOW"
+}
+
+function matchAllowedByProfile(m: OverviewMatch, profile: ProfileKey) {
+  const conf = confidenceLabel(Number(m.confidence ?? 0))
+  const risk = matchRisk(m)
+  if (profile === "PRUDENT") return conf === "HIGH" && risk === "LOW"
+  if (profile === "BALANCED") return conf !== "LOW" && risk !== "HIGH"
+  return true
+}
+
+function stakePctForProfile(profile: ProfileKey, conf: string, risk: string) {
+  const base = stakePct(conf, risk)
+  if (profile === "PRUDENT") return Math.min(2.0, Math.max(0.5, base * 0.7))
+  if (profile === "AGGRESSIVE") return Math.min(6.0, Math.max(0.5, base * 1.2))
+  return base
+}
+
+function readLocalProfile(): ProfileKey | null {
+  if (typeof window === "undefined") return null
+  try {
+    const v = window.localStorage.getItem("user_profile")
+    if (!v) return null
+    return normalizeProfileKey(v)
+  } catch {
+    return null
+  }
+}
+
+function writeLocalProfile(p: ProfileKey) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem("user_profile", p)
+  } catch {}
+}
+
+function stakePct(conf: string, risk: string) {
+  const c = String(conf || "").toUpperCase()
+  const r = String(risk || "").toUpperCase()
+  if (c === "LOW") return 1.0
+  if (c === "HIGH" && r === "LOW") return 4.5
+  if (c === "HIGH" && r === "MEDIUM") return 3.0
+  if (c === "MEDIUM" && r === "LOW") return 2.0
+  return 1.25
+}
+
+function stakeUnits(bankroll: number, pct: number) {
+  const br = Number(bankroll)
+  const p = Number(pct)
+  if (!Number.isFinite(br) || br <= 0) return 0
+  if (!Number.isFinite(p) || p <= 0) return 0
+  return Math.max(0, Math.round(br * p / 100))
 }
 
 function shortTeam(s: string) {
@@ -193,6 +355,7 @@ function champOrderKey(champ: string) {
 export function StatisticalPredictionsDashboard() {
   const [overview, setOverview] = useState<ChampionshipOverview[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [systemStatus, setSystemStatus] = useState<{ data_provider: string; data_error?: string | null; football_data_key_present: boolean; api_football_key_present: boolean } | null>(null)
   const [selectedChamp, setSelectedChamp] = useState<string>("serie_a")
   const [selectedMdKey, setSelectedMdKey] = useState<string>("")
   const [seasonAuc, setSeasonAuc] = useState<number | null>(null)
@@ -201,6 +364,10 @@ export function StatisticalPredictionsDashboard() {
   const [trackDays, setTrackDays] = useState<number>(120)
   const [trackRecord, setTrackRecord] = useState<TrackRecordResponse | null>(null)
   const [trackError, setTrackError] = useState<string | null>(null)
+  const [bankroll, setBankroll] = useState<number>(100)
+  const [profile, setProfile] = useState<ProfileKey>("BALANCED")
+  const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null)
+  const [profileLoaded, setProfileLoaded] = useState<boolean>(false)
 
   const [openTeamExplain, setOpenTeamExplain] = useState<string>("")
   const [teamExplain, setTeamExplain] = useState<ExplainResponse | null>(null)
@@ -211,12 +378,105 @@ export function StatisticalPredictionsDashboard() {
   const [matchExplain, setMatchExplain] = useState<ExplainResponse | null>(null)
   const [matchExplainError, setMatchExplainError] = useState<string | null>(null)
   const [matchExplainLoading, setMatchExplainLoading] = useState<boolean>(false)
+  const [multiMarket, setMultiMarket] = useState<MultiMarketConfidenceResponse | null>(null)
+  const [multiMarketError, setMultiMarketError] = useState<string | null>(null)
+  const [multiMarketLoading, setMultiMarketLoading] = useState<boolean>(false)
+  const [selectedMarketKey, setSelectedMarketKey] = useState<string>("")
+  const openMatchExplainIdRef = useRef<string>("")
+
+  useEffect(() => {
+    openMatchExplainIdRef.current = openMatchExplainId
+  }, [openMatchExplainId])
+
+  useEffect(() => {
+    let active = true
+    fetchTenantConfig()
+      .then((cfg) => {
+        if (!active) return
+        setTenantConfig(cfg)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const brandName = String(tenantConfig?.branding?.app_name ?? "").trim()
+    const champLabel = String(CHAMP_LABELS[selectedChamp] ?? selectedChamp).trim()
+    if (typeof document !== "undefined") {
+      document.title = brandName ? `${brandName} · ${champLabel}` : champLabel || "Dashboard"
+    }
+  }, [selectedChamp, tenantConfig?.branding?.app_name])
+
+  useEffect(() => {
+    if (!error || systemStatus) return
+    let active = true
+    fetchSystemStatus()
+      .then((s) => {
+        if (!active) return
+        setSystemStatus({
+          data_provider: String(s.data_provider ?? ""),
+          data_error: s.data_error ?? null,
+          football_data_key_present: Boolean(s.football_data_key_present),
+          api_football_key_present: Boolean(s.api_football_key_present)
+        })
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [error, systemStatus])
+
+  useEffect(() => {
+    const disabled = tenantConfig?.features?.disabled_profiles ?? []
+    const disabledSet = new Set(disabled.map((p) => String(p ?? "").trim().toUpperCase()))
+    if (!disabledSet.has(profile)) return
+    const ordered: ProfileKey[] = ["BALANCED", "PRUDENT", "AGGRESSIVE"]
+    const next = ordered.find((p) => !disabledSet.has(p)) ?? "BALANCED"
+    setProfile(next)
+  }, [profile, tenantConfig?.features?.disabled_profiles])
+
+  useEffect(() => {
+    if (profileLoaded) return
+    const local = readLocalProfile()
+    if (local) setProfile(local)
+    setProfileLoaded(true)
+    fetchUserProfile()
+      .then((p: UserProfile) => {
+        setProfile(normalizeProfileKey(p.profile))
+        const br = Number(p.bankroll_reference ?? NaN)
+        if (Number.isFinite(br) && br > 0) setBankroll(br)
+        writeLocalProfile(normalizeProfileKey(p.profile))
+      })
+      .catch(() => {})
+  }, [profileLoaded])
+
+  useEffect(() => {
+    if (!profileLoaded) return
+    writeLocalProfile(profile)
+    const t = window.setTimeout(() => {
+      updateUserProfile({ profile, bankroll_reference: bankroll })
+        .then(() => {})
+        .catch(() => {})
+    }, 350)
+    return () => window.clearTimeout(t)
+  }, [bankroll, profile, profileLoaded])
+
+  useEffect(() => {
+    if (!multiMarket || selectedMarketKey) return
+    const mid = String(multiMarket.match_id ?? "").trim()
+    if (!mid || mid !== openMatchExplainId) return
+    const best = bestMarketKey(filterMarketsByTenant(multiMarket.markets ?? {}, tenantConfig?.filters?.active_markets))
+    if (best) setSelectedMarketKey(best)
+  }, [multiMarket, openMatchExplainId, selectedMarketKey, tenantConfig?.filters?.active_markets])
 
   useEffect(() => {
     let active = true
     async function load() {
       try {
-        const res = await fetch(apiUrl("/api/v1/overview/championships"), { cache: "no-store" })
+        setError(null)
+        const res = await fetch(apiUrl("/api/v1/overview/championships"), { cache: "no-store", headers: { "x-tenant-id": getTenantId() } })
         if (!res.ok) {
           let detail = ""
           try {
@@ -229,6 +489,7 @@ export function StatisticalPredictionsDashboard() {
         if (!active) return
         const list = [...(json.championships ?? [])].sort((a, b) => champOrderKey(a.championship) - champOrderKey(b.championship))
         setOverview(list)
+        setSystemStatus(null)
       } catch (e) {
         if (!active) return
         setError(String((e as Error)?.message ?? e))
@@ -325,27 +586,39 @@ export function StatisticalPredictionsDashboard() {
   }, [matchdayKeys, matchdays, selectedMdKey])
 
   const toPlay = useMemo(() => (selectedMd?.matches ?? []).filter((m) => m.status !== "FINISHED"), [selectedMd])
+  const tenantMinConfidence = String(tenantConfig?.filters?.min_confidence ?? "LOW").toUpperCase()
+  const visibleToPlay = useMemo(() => {
+    const minRank = confidenceRank(tenantMinConfidence)
+    return toPlay.filter((m) => matchAllowedByProfile(m, profile) && confidenceRank(confidenceLabel(Number(m.confidence ?? 0))) >= minRank)
+  }, [profile, tenantMinConfidence, toPlay])
 
   const nextMatches = useMemo(() => {
-    return toPlay
+    return visibleToPlay
       .slice()
       .sort((a, b) => bestProb(b) - bestProb(a))
       .slice(0, 4)
-  }, [toPlay])
+  }, [visibleToPlay])
 
-  const stats = useMemo(() => derivedStats(toPlay), [toPlay])
+  const stats = useMemo(() => derivedStats(visibleToPlay), [visibleToPlay])
   const trend = useMemo(() => probabilityTrend(matchdays), [matchdays])
-  const power = useMemo(() => expectedPointsTable(toPlay).slice(0, 5), [toPlay])
+  const power = useMemo(() => expectedPointsTable(visibleToPlay).slice(0, 5), [visibleToPlay])
 
   const topFormTeams = useMemo(() => {
-    const list = expectedPointsTable(toPlay).slice(0, 5)
+    const list = expectedPointsTable(visibleToPlay).slice(0, 5)
     return list.map((r) => ({ team: r.team, form: teamForm(finished, r.team) }))
-  }, [finished, toPlay])
+  }, [finished, visibleToPlay])
 
   const title = (champ?.title ?? CHAMP_LABELS[selectedChamp] ?? "Dashboard").toUpperCase()
-  const activeColor = CHAMP_COLORS[selectedChamp] ?? "#22c55e"
-  const matchesCount = toPlay.length
-  const avgBest = matchesCount ? toPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
+  const brandPrimaryColor = String(tenantConfig?.branding?.primary_color ?? "").trim()
+  const activeColor = brandPrimaryColor || (CHAMP_COLORS[selectedChamp] ?? "#22c55e")
+  const educationalOnly = Boolean(tenantConfig?.compliance?.educational_only)
+  const disclaimerText = String(tenantConfig?.compliance?.disclaimer_text ?? "").trim()
+  const brandName = String(tenantConfig?.branding?.app_name ?? "").trim() || "Forecast Master System"
+  const brandTagline = String(tenantConfig?.branding?.tagline ?? "").trim()
+  const brandLogoUrl = String(tenantConfig?.branding?.logo_url ?? "").trim()
+  const disabledProfiles = (tenantConfig?.features?.disabled_profiles ?? []) as ProfileKey[]
+  const matchesCount = visibleToPlay.length
+  const avgBest = matchesCount ? visibleToPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
   const gaugeValue = avgBest
   const teamsToPlayItem = useMemo(() => {
     const items = teamsToPlay?.items ?? []
@@ -397,19 +670,38 @@ export function StatisticalPredictionsDashboard() {
       setMatchExplain(null)
       setMatchExplainError(null)
       setMatchExplainLoading(false)
+      setMultiMarket(null)
+      setMultiMarketError(null)
+      setMultiMarketLoading(false)
+      setSelectedMarketKey("")
       return
     }
     setOpenMatchExplainId(key)
     setMatchExplain(null)
     setMatchExplainError(null)
     setMatchExplainLoading(true)
+    setMultiMarket(null)
+    setMultiMarketError(null)
+    setMultiMarketLoading(true)
+    setSelectedMarketKey("")
     try {
-      const res = await fetchExplainMatch(key)
-      setMatchExplain(res)
-    } catch (e) {
-      setMatchExplainError(String((e as Error)?.message ?? e))
+      const [explainRes, marketsRes] = await Promise.allSettled([fetchExplainMatch(key), fetchMultiMarketConfidence(key)])
+      if (openMatchExplainIdRef.current !== key) return
+      if (explainRes.status === "fulfilled") {
+        setMatchExplain(explainRes.value)
+      } else {
+        setMatchExplainError(String((explainRes.reason as Error)?.message ?? explainRes.reason))
+      }
+      if (marketsRes.status === "fulfilled") {
+        setMultiMarket(marketsRes.value)
+      } else {
+        setMultiMarketError(String((marketsRes.reason as Error)?.message ?? marketsRes.reason))
+      }
     } finally {
-      setMatchExplainLoading(false)
+      if (openMatchExplainIdRef.current === key) {
+        setMatchExplainLoading(false)
+        setMultiMarketLoading(false)
+      }
     }
   }
 
@@ -420,6 +712,24 @@ export function StatisticalPredictionsDashboard() {
         <div className="text-sm font-semibold tracking-tight">Dashboard</div>
         <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">API: {apiLabel}</div>
         <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{error}</div>
+        {systemStatus ? (
+          <div className="mt-3 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
+            <div className="font-semibold">Stato API</div>
+            <div className="mt-1">Provider: {systemStatus.data_provider}</div>
+            <div className="mt-1">Errore: {String(systemStatus.data_error ?? "n/d")}</div>
+            <div className="mt-1">FOOTBALL_DATA_KEY presente: {systemStatus.football_data_key_present ? "sì" : "no"}</div>
+            <div className="mt-1">API_FOOTBALL_KEY presente: {systemStatus.api_football_key_present ? "sì" : "no"}</div>
+            {String(systemStatus.data_error ?? "").includes("football_data_http_400") ? (
+              <div className="mt-2 font-semibold">
+                Token Football-Data non valido: aggiorna la chiave oppure usa un provider diverso (mock/api_football).
+              </div>
+            ) : String(systemStatus.data_error ?? "").includes("football_data_http_401") || String(systemStatus.data_error ?? "").includes("football_data_http_403") ? (
+              <div className="mt-2 font-semibold">
+                Accesso Football-Data non autorizzato: verifica la chiave e i permessi oppure usa un provider diverso (mock/api_football).
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-4 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
           Puoi impostare la base API anche senza rebuild aprendo il sito con <span className="font-mono">?api=https://TUO-TUNNEL</span>.
         </div>
@@ -441,18 +751,78 @@ export function StatisticalPredictionsDashboard() {
       <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-white/10 dark:ring-white/10" />
 
       <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-md dark:bg-zinc-950/25">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold tracking-[0.18em] text-zinc-700 dark:text-zinc-200">
-            FOOTBALL LEAGUE ANALYTICS & FORECASTS
-          </div>
+        <div className="min-w-0 flex items-center gap-3">
+          {brandLogoUrl ? (
+            <img
+              src={brandLogoUrl}
+              alt={brandName}
+              className="h-8 w-8 rounded-lg border border-white/10 bg-white/10 object-cover"
+            />
+          ) : null}
+          <div className="min-w-0">
+            <div className="text-xs font-semibold tracking-[0.18em] text-zinc-700 dark:text-zinc-200">
+              {brandName.toUpperCase()}
+            </div>
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+            {brandTagline ? `${brandTagline} · ` : ""}
             {title} · {selectedMd?.matchday_label ?? "Giornata"} · ROC-AUC {seasonAuc == null ? "n/d" : seasonAuc.toFixed(3)} · Track{" "}
             {trackRecord?.summary?.n
               ? `${fmtPct(Number(trackRecord.summary.accuracy ?? 0))} · ROI avg ${fmtSigned(Number(trackRecord.summary.roi_avg ?? 0))}`
               : "n/d"}
           </div>
+          {disclaimerText ? (
+            <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">{disclaimerText}</div>
+          ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-2">
+          {educationalOnly ? (
+            <div className="rounded-full border border-violet-400/20 bg-violet-500/15 px-3 py-1 text-[11px] font-semibold text-violet-200">
+              Educational only
+            </div>
+          ) : null}
+          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+            <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
+            {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
+              const active = profile === p
+              const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
+              const tint =
+                p === "PRUDENT"
+                  ? "border-emerald-400/20 bg-emerald-500/15 text-emerald-200"
+                  : p === "AGGRESSIVE"
+                    ? "border-rose-400/20 bg-rose-500/15 text-rose-200"
+                    : "border-amber-400/20 bg-amber-500/15 text-amber-200"
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setProfile(p)}
+                  title={profileTooltip(p)}
+                  className={[
+                    "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                    active ? tint : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                  ].join(" ")}
+                  aria-pressed={active}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+            <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Bankroll</div>
+            <input
+              type="range"
+              min={50}
+              max={1000}
+              step={10}
+              value={bankroll}
+              onChange={(e) => setBankroll(Number(e.target.value))}
+              className="w-28 accent-emerald-500"
+              aria-label="Bankroll"
+            />
+            <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{bankroll}u</div>
+          </div>
           {overview.map((c) => {
             const isActive = c.championship === selectedChamp
             const col = CHAMP_COLORS[c.championship] ?? "#3b82f6"
@@ -553,6 +923,25 @@ export function StatisticalPredictionsDashboard() {
                   const p2 = safeProb(m, "away_win")
                   const kickoffLabel = formatKickoff(m.kickoff_unix)
                   const open = openMatchExplainId === m.match_id
+                  const conf = confidenceLabel(Number(m.confidence ?? 0))
+                  const risk = matchRisk(m)
+                  const pct = educationalOnly ? 0 : stakePctForProfile(profile, conf, risk)
+                  const units = educationalOnly ? 0 : stakeUnits(bankroll, pct)
+                  const marketOk = !!multiMarket && String(multiMarket.match_id ?? "") === String(m.match_id ?? "")
+                  const markets0 = marketOk ? (multiMarket?.markets ?? {}) : {}
+                  const markets = marketOk ? filterMarketsByTenant(markets0, tenantConfig?.filters?.active_markets) : {}
+                  const bestMk = marketOk ? bestMarketKey(markets) : ""
+                  const selectedMk = (selectedMarketKey && markets[selectedMarketKey]) ? selectedMarketKey : bestMk
+                  const selectedMarket = selectedMk ? markets[selectedMk] : undefined
+                  const marketKeys = Object.keys(markets)
+                  const tenantOrder0 = Array.isArray(tenantConfig?.filters?.active_markets) ? tenantConfig?.filters?.active_markets : []
+                  const tenantOrder = tenantOrder0.map((x) => normalizeMarketKey(x)).filter(Boolean)
+                  const orderedMarketKeys = tenantOrder.length
+                    ? tenantOrder.filter((k) => marketKeys.includes(k))
+                    : [
+                        ...["1X2", "OVER_2_5", "BTTS"].filter((k) => marketKeys.includes(k)),
+                        ...marketKeys.filter((k) => !["1X2", "OVER_2_5", "BTTS"].includes(k))
+                      ]
                   return (
                     <div
                       key={m.match_id}
@@ -571,6 +960,16 @@ export function StatisticalPredictionsDashboard() {
                         <div className="shrink-0 flex flex-col items-end gap-2 text-right">
                           <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
                             {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                              {educationalOnly ? "Educational only" : `Stake ${units}u (${pct.toFixed(2)}%)`}
+                            </div>
+                            {profile === "PRUDENT" || pct <= 2.0 ? (
+                              <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                gestione prudente
+                              </span>
+                            ) : null}
                           </div>
                           <button
                             type="button"
@@ -595,33 +994,113 @@ export function StatisticalPredictionsDashboard() {
                       </div>
                       {open ? (
                         <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-                          {matchExplainLoading ? (
-                            <div>Caricamento…</div>
-                          ) : matchExplainError ? (
-                            <div>{matchExplainError}</div>
-                          ) : !matchExplain ? (
-                            <div>n/d</div>
-                          ) : (
+                          <div className="space-y-3">
                             <div className="space-y-2">
-                              <div className="font-semibold text-zinc-900 dark:text-zinc-50">
-                                {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
-                                {matchExplain.pick ? <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span> : null}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="font-semibold text-zinc-900 dark:text-zinc-50">Mercati</div>
+                                {bestMk && markets[bestMk] ? (
+                                  <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                                    Migliore: {marketDisplayName(bestMk)} · Conf {Number(markets[bestMk].confidence ?? 0)}% · Risk {String(markets[bestMk].risk ?? "")}
+                                  </div>
+                                ) : null}
                               </div>
-                              <div className="space-y-1">
-                                {(matchExplain.why ?? []).map((t, i) => (
-                                  <div key={`why-${i}`}>• {t}</div>
-                                ))}
-                              </div>
-                              {(matchExplain.risks ?? []).length ? (
-                                <div className="space-y-1">
-                                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
-                                  {(matchExplain.risks ?? []).map((t, i) => (
-                                    <div key={`risk-${i}`}>• {t}</div>
-                                  ))}
+
+                              {multiMarketLoading ? (
+                                <div>Caricamento…</div>
+                              ) : multiMarketError && !marketOk ? (
+                                <div>{multiMarketError}</div>
+                              ) : !marketOk ? (
+                                <div>n/d</div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap gap-2">
+                                    {orderedMarketKeys.map((k) => {
+                                      const mk = markets[k]
+                                      const active = selectedMk === k
+                                      const best = bestMk === k
+                                      const unstable = mk ? isUnstableMarket(mk) : false
+                                      return (
+                                        <button
+                                          key={`mk-${m.match_id}-${k}`}
+                                          type="button"
+                                          onClick={() => setSelectedMarketKey(k)}
+                                          className={[
+                                            "flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                                            active
+                                              ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                                              : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                                          ].join(" ")}
+                                        >
+                                          <span>{marketDisplayName(k)}</span>
+                                          {mk ? (
+                                            <span className="text-[10px] text-zinc-600 dark:text-zinc-300">
+                                              {Number(mk.confidence ?? 0)}% · {String(mk.risk ?? "")}
+                                            </span>
+                                          ) : null}
+                                          {best ? (
+                                            <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                              migliore
+                                            </span>
+                                          ) : null}
+                                          {unstable ? (
+                                            <span className="rounded-full border border-amber-400/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+                                              instabile
+                                            </span>
+                                          ) : null}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+
+                                  {selectedMarket ? (
+                                    <div className="rounded-xl border border-white/10 bg-white/10 p-3 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{marketDisplayName(selectedMk)}</div>
+                                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                                          Prob {fmtPct(Number(selectedMarket.probability ?? 0))} · Conf {Number(selectedMarket.confidence ?? 0)}% · Risk {String(selectedMarket.risk ?? "")}
+                                        </div>
+                                      </div>
+                                      {isUnstableMarket(selectedMarket) ? (
+                                        <div className="mt-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                                          Warning: mercato instabile (confidence bassa o rischio HIGH)
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
                                 </div>
-                              ) : null}
+                              )}
                             </div>
-                          )}
+
+                            <div>
+                              {matchExplainLoading ? (
+                                <div>Caricamento…</div>
+                              ) : matchExplainError ? (
+                                <div>{matchExplainError}</div>
+                              ) : !matchExplain ? (
+                                <div>n/d</div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <div className="font-semibold text-zinc-900 dark:text-zinc-50">
+                                    {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
+                                    {matchExplain.pick ? <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span> : null}
+                                  </div>
+                                  <div className="space-y-1">
+                                    {(matchExplain.why ?? []).map((t, i) => (
+                                      <div key={`why-${i}`}>• {t}</div>
+                                    ))}
+                                  </div>
+                                  {(matchExplain.risks ?? []).length ? (
+                                    <div className="space-y-1">
+                                      <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
+                                      {(matchExplain.risks ?? []).map((t, i) => (
+                                        <div key={`risk-${i}`}>• {t}</div>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       ) : null}
                     </div>

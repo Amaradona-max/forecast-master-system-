@@ -139,6 +139,15 @@ class AppState:
                 )
                 con.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS tenant_config (
+                        tenant_id TEXT PRIMARY KEY,
+                        config_json TEXT NOT NULL,
+                        updated_at_unix REAL NOT NULL
+                    );
+                    """
+                )
+                con.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS notifications_delivery_log (
                         user_id TEXT NOT NULL,
                         channel TEXT NOT NULL,
@@ -810,6 +819,48 @@ class AppState:
                 ),
             )
 
+    def _db_get_tenant_config(self, *, tenant_id: str) -> dict[str, Any] | None:
+        if not self._db_enabled:
+            return None
+        tid = str(tenant_id or "").strip() or "default"
+        with sqlite3.connect(self._db_path, timeout=5) as con:
+            row = con.execute(
+                """
+                SELECT config_json, updated_at_unix
+                FROM tenant_config
+                WHERE tenant_id=?;
+                """,
+                (tid,),
+            ).fetchone()
+        if not isinstance(row, tuple) or len(row) < 2:
+            return None
+        config_json, updated_at_unix = row
+        try:
+            cfg = json.loads(config_json) if isinstance(config_json, str) else {}
+        except Exception:
+            cfg = {}
+        return {
+            "tenant_id": tid,
+            "config": cfg if isinstance(cfg, dict) else {},
+            "updated_at_unix": float(updated_at_unix or 0.0),
+        }
+
+    def _db_upsert_tenant_config(self, *, tenant_id: str, config_json: str, updated_at_unix: float) -> None:
+        if not self._db_enabled:
+            return
+        tid = str(tenant_id or "").strip() or "default"
+        with sqlite3.connect(self._db_path, timeout=5) as con:
+            con.execute(
+                """
+                INSERT INTO tenant_config (tenant_id, config_json, updated_at_unix)
+                VALUES (?, ?, ?)
+                ON CONFLICT(tenant_id) DO UPDATE SET
+                    config_json=excluded.config_json,
+                    updated_at_unix=excluded.updated_at_unix;
+                """,
+                (tid, str(config_json), float(updated_at_unix)),
+            )
+
     def _db_list_notification_preferences(self) -> list[dict[str, Any]]:
         if not self._db_enabled:
             return []
@@ -1287,6 +1338,28 @@ class AppState:
             return []
         rows = await asyncio.to_thread(self._db_list_notification_preferences)
         return rows if isinstance(rows, list) else []
+
+    async def get_tenant_config(self, *, tenant_id: str = "default") -> dict[str, Any]:
+        tid = str(tenant_id or "").strip() or "default"
+        if not self._db_enabled:
+            return {"tenant_id": tid, "config": {}, "updated_at_unix": 0.0}
+        row = await asyncio.to_thread(self._db_get_tenant_config, tenant_id=tid)
+        if isinstance(row, dict) and row:
+            return row
+        return {"tenant_id": tid, "config": {}, "updated_at_unix": 0.0}
+
+    async def upsert_tenant_config(self, *, tenant_id: str = "default", config: dict[str, Any]) -> dict[str, Any]:
+        tid = str(tenant_id or "").strip() or "default"
+        if not self._db_enabled:
+            return {"tenant_id": tid, "config": config if isinstance(config, dict) else {}, "updated_at_unix": 0.0}
+        cfg = config if isinstance(config, dict) else {}
+        try:
+            raw = json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            raw = "{}"
+        now_unix = float(time.time())
+        await asyncio.to_thread(self._db_upsert_tenant_config, tenant_id=tid, config_json=str(raw), updated_at_unix=float(now_unix))
+        return await self.get_tenant_config(tenant_id=tid)
 
     async def log_delivery_if_new(self, *, user_id: str, channel: str, notification_key: str, ntype: str) -> bool:
         if not self._db_enabled:

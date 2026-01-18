@@ -5,19 +5,72 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api_gateway.app.settings import settings
+from api_gateway.app.state import AppState
 
 
 router = APIRouter()
+
+def _tenant_id_from_request(request: Request) -> str:
+    tid = request.headers.get("x-tenant-id")
+    if isinstance(tid, str) and tid.strip():
+        return tid.strip().lower()
+    qp = request.query_params.get("tenant") or request.query_params.get("tenant_id")
+    if isinstance(qp, str) and qp.strip():
+        return qp.strip().lower()
+    return "default"
+
+
+def _country_from_request(request: Request) -> str | None:
+    for k in ("cf-ipcountry", "x-country", "x-geo-country"):
+        v = request.headers.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return None
+
+
+def _apply_region_policy(request: Request, compliance: dict[str, Any]) -> None:
+    if not isinstance(compliance, dict):
+        return
+    cc = _country_from_request(request)
+    allow = compliance.get("allowed_countries")
+    block = compliance.get("blocked_countries")
+    allow_list = [str(x).strip().upper() for x in (allow if isinstance(allow, list) else []) if str(x).strip()]
+    block_list = [str(x).strip().upper() for x in (block if isinstance(block, list) else []) if str(x).strip()]
+    if cc is None:
+        return
+    if block_list and cc in set(block_list):
+        raise HTTPException(status_code=451, detail="region_blocked")
+    if allow_list and cc not in set(allow_list):
+        raise HTTPException(status_code=451, detail="region_not_allowed")
+
+
+def _confidence_label_from_pct(v: Any) -> str:
+    try:
+        n = int(v)
+    except Exception:
+        n = 0
+    if n >= 75:
+        return "HIGH"
+    if n >= 55:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _min_conf_ok(*, confidence_pct: int, min_label: str) -> bool:
+    cur = _confidence_label_from_pct(confidence_pct)
+    want = str(min_label or "").strip().upper() or "LOW"
+    rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+    return rank.get(cur, 0) >= rank.get(want, 0)
+
 
 
 class TeamToPlay(BaseModel):
     team: str
     success_pct: float
-    strength_pct: float
     form_pct: float
 
 
@@ -29,6 +82,25 @@ class TeamsToPlayItem(BaseModel):
 class TeamsToPlayResponse(BaseModel):
     generated_at_utc: datetime
     items: list[TeamsToPlayItem] = Field(default_factory=list)
+
+
+class StakeSuggestionResponse(BaseModel):
+    stake_pct: float
+    stake_units: int
+    bankroll_reference: float
+
+
+class MarketConfidence(BaseModel):
+    probability: float
+    confidence: int
+    risk: str
+
+
+class MultiMarketConfidenceResponse(BaseModel):
+    generated_at_utc: datetime
+    match_id: str
+    match: str
+    markets: dict[str, MarketConfidence] = Field(default_factory=dict)
 
 
 def _championship_display_name(championship: str) -> str:
@@ -58,6 +130,196 @@ def _strength_to_pct(strength: float) -> float:
     if s > 0.9:
         s = 0.9
     return _clamp01((s + 0.9) / 1.8)
+
+
+def _norm_confidence_label(v: Any) -> str:
+    s = str(v or "").strip().upper()
+    if s in {"HIGH", "ALTA", "A"}:
+        return "HIGH"
+    if s in {"MEDIUM", "MEDIA", "M"}:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _norm_risk(v: Any) -> str:
+    s = str(v or "").strip().upper()
+    if s in {"LOW", "BASSO", "BASSA", "L"}:
+        return "LOW"
+    return "MEDIUM"
+
+
+def _stake_pct_for(*, confidence_label: str, risk: str) -> float:
+    c = _norm_confidence_label(confidence_label)
+    r = _norm_risk(risk)
+    if c == "LOW":
+        return 1.0
+    if c == "HIGH" and r == "LOW":
+        return 4.5
+    if c == "HIGH" and r == "MEDIUM":
+        return 3.0
+    if c == "MEDIUM" and r == "LOW":
+        return 2.0
+    return 1.25
+
+
+@router.get("/api/v1/stake/suggest", response_model=StakeSuggestionResponse)
+async def stake_suggest(request: Request, confidence: str, risk: str = "LOW", bankroll_reference: float = 100.0) -> StakeSuggestionResponse:
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
+    state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
+    if bool(compliance.get("educational_only", False)):
+        raise HTTPException(status_code=403, detail="educational_only")
+    try:
+        br = float(bankroll_reference)
+    except Exception:
+        br = 100.0
+    if br < 0.0:
+        br = 0.0
+    if br > 1_000_000.0:
+        br = 1_000_000.0
+    pct = float(_stake_pct_for(confidence_label=confidence, risk=risk))
+    units = int(round(br * pct / 100.0)) if br > 0.0 else 0
+    if units < 0:
+        units = 0
+    return StakeSuggestionResponse(stake_pct=round(pct, 2), stake_units=int(units), bankroll_reference=float(br))
+
+
+def _confidence_pct_from_score(score: Any) -> int:
+    try:
+        s = float(score)
+    except Exception:
+        s = 0.0
+    if s < 0.0:
+        s = 0.0
+    if s > 1.0:
+        s = 1.0
+    return int(round(s * 100.0))
+
+
+def _quality_from_explain(explain: dict[str, Any]) -> float:
+    safe_mode = bool(explain.get("safe_mode"))
+    missing = explain.get("missing_flags")
+    missing_count = len(missing) if isinstance(missing, list) else 0
+    q = 1.0
+    if missing_count >= 2:
+        q *= 0.70
+    elif missing_count == 1:
+        q *= 0.85
+    if safe_mode:
+        q *= 0.85
+    if q < 0.10:
+        q = 0.10
+    if q > 1.0:
+        q = 1.0
+    return float(q)
+
+
+def _binary_confidence(prob: float, quality: float) -> int:
+    try:
+        p = float(prob)
+    except Exception:
+        p = 0.0
+    if p < 0.0:
+        p = 0.0
+    if p > 1.0:
+        p = 1.0
+    strength = abs(p - 0.5) * 2.0
+    s = strength * float(quality)
+    if s < 0.0:
+        s = 0.0
+    if s > 1.0:
+        s = 1.0
+    return int(round(s * 100.0))
+
+
+def _risk_from_confidence(confidence: int, quality: float) -> str:
+    c = int(confidence)
+    if c < 45:
+        return "HIGH"
+    if c >= 75 and float(quality) >= 0.90:
+        return "LOW"
+    return "MEDIUM"
+
+
+@router.get("/api/v1/insights/multi-market", response_model=MultiMarketConfidenceResponse)
+async def multi_market_confidence(request: Request, match_id: str) -> MultiMarketConfidenceResponse:
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
+    state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
+    m = await state.get_match(str(match_id))
+    if m is None:
+        return MultiMarketConfidenceResponse(generated_at_utc=datetime.now(timezone.utc), match_id=str(match_id), match="", markets={})
+
+    explain0: dict[str, Any] = {}
+    if isinstance(getattr(m, "meta", None), dict):
+        x = m.meta.get("explain")
+        if isinstance(x, dict):
+            explain0 = x
+
+    quality = _quality_from_explain(explain0)
+    probs0 = getattr(m, "probabilities", None)
+    probs = probs0 if isinstance(probs0, dict) else {}
+    p1 = float(probs.get("home_win", 0.0) or 0.0)
+    px = float(probs.get("draw", 0.0) or 0.0)
+    p2 = float(probs.get("away_win", 0.0) or 0.0)
+    s = max(p1, 0.0) + max(px, 0.0) + max(p2, 0.0)
+    if s > 0:
+        p1, px, p2 = max(p1, 0.0) / s, max(px, 0.0) / s, max(p2, 0.0) / s
+    else:
+        p1, px, p2 = 1 / 3, 1 / 3, 1 / 3
+    top_prob = max(p1, px, p2)
+
+    conf_obj = explain0.get("confidence")
+    conf_score = None
+    if isinstance(conf_obj, dict):
+        v = conf_obj.get("score")
+        if isinstance(v, (int, float)):
+            conf_score = float(v)
+    conf_1x2 = _confidence_pct_from_score(conf_score if conf_score is not None else (top_prob * quality))
+    risk_1x2 = _risk_from_confidence(conf_1x2, quality)
+
+    derived = explain0.get("derived_markets")
+    dmk = derived if isinstance(derived, dict) else {}
+    p_over25 = float(dmk.get("over_2_5", 0.0) or 0.0)
+    p_btts = float(dmk.get("btts", 0.0) or 0.0)
+
+    conf_over25 = _binary_confidence(p_over25, quality)
+    conf_btts = _binary_confidence(p_btts, quality)
+    risk_over25 = _risk_from_confidence(conf_over25, quality)
+    risk_btts = _risk_from_confidence(conf_btts, quality)
+
+    match_label = f"{str(getattr(m, 'home_team', '') or '').strip()} vs {str(getattr(m, 'away_team', '') or '').strip()}".strip()
+    markets = {
+        "1X2": MarketConfidence(probability=float(top_prob), confidence=int(conf_1x2), risk=str(risk_1x2)),
+        "OVER_2_5": MarketConfidence(probability=float(_clamp01(p_over25)), confidence=int(conf_over25), risk=str(risk_over25)),
+        "BTTS": MarketConfidence(probability=float(_clamp01(p_btts)), confidence=int(conf_btts), risk=str(risk_btts)),
+    }
+    filters = tenant_cfg.get("filters") if isinstance(tenant_cfg.get("filters"), dict) else {}
+    allowed_markets_raw = filters.get("active_markets")
+    allowed_markets = [str(x).strip().upper() for x in (allowed_markets_raw if isinstance(allowed_markets_raw, list) else []) if str(x).strip()]
+    if allowed_markets:
+        allow_set = set(allowed_markets)
+        markets = {k: v for k, v in markets.items() if str(k).upper() in allow_set}
+    min_label = str(filters.get("min_confidence") or "LOW").strip().upper() or "LOW"
+    markets = {k: v for k, v in markets.items() if _min_conf_ok(confidence_pct=int(v.confidence), min_label=min_label)}
+    return MultiMarketConfidenceResponse(
+        generated_at_utc=datetime.now(timezone.utc),
+        match_id=str(match_id),
+        match=match_label,
+        markets=markets,
+    )
 
 
 def _read_ratings() -> dict[str, dict[str, float]]:
@@ -367,7 +629,19 @@ async def teams_to_play(request: Request) -> TeamsToPlayResponse:
     if not ratings:
         return TeamsToPlayResponse(generated_at_utc=datetime.now(timezone.utc), items=[])
 
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
     state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
+    filters = tenant_cfg.get("filters") if isinstance(tenant_cfg.get("filters"), dict) else {}
+    raw_vis = filters.get("visible_championships")
+    allow_champs = [str(x).strip().lower() for x in (raw_vis if isinstance(raw_vis, list) else []) if str(x).strip()]
+    allow_set = set(allow_champs) if allow_champs else set()
     matches = await state.list_matches()
 
     finished_by_champ: dict[str, list] = {}
@@ -383,6 +657,8 @@ async def teams_to_play(request: Request) -> TeamsToPlayResponse:
 
     items: list[TeamsToPlayItem] = []
     for champ, strengths in ratings.items():
+        if allow_set and str(champ).strip().lower() not in allow_set:
+            continue
         games = finished_by_champ.get(champ, [])
         games.sort(key=lambda x: x[0], reverse=True)
 
