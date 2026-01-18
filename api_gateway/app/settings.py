@@ -46,11 +46,39 @@ class Settings(BaseSettings):
     }
     football_data_max_competitions_per_seed: int = 4
     fixtures_days_ahead: int = 90
+    fixtures_refresh_days_back: int = 3
+    fixtures_refresh_days_ahead: int = 0
+    fixtures_refresh_cache_ttl_seconds: int = 600
+    fixtures_refresh_interval_seconds: int = 600
+    fixtures_season_start_utc: str = "2025-08-01T00:00:00Z"
+    fixtures_season_end_utc: str = "2026-06-30T23:59:59Z"
+    fixtures_season_cache_ttl_seconds: int = 43200
+    fixtures_season_interval_seconds: int = 86400
+    ratings_refresh_enabled: bool = True
+    ratings_refresh_interval_seconds: int = 86400
+    ratings_weekend_refresh_interval_seconds: int = 0
     ratings_path: str = "data/team_ratings.json"
     historical_start_season: int = 2015
     historical_end_season: int = 2025
     local_data_dir: str = ".."
     local_calendar_filename: str = "Calendari_Calcio_2025_2026.xlsx"
+
+    notifications_enabled: bool = False
+    notifications_interval_seconds: int = 300
+    notifications_match_imminent_hours: int = 24
+    notifications_team_success_threshold_pct: float = 75.0
+    notifications_team_confidence_threshold_pct: float = 70.0
+    notifications_value_index_threshold: float = 10.0
+
+    notifications_push_enabled: bool = True
+
+    notifications_email_enabled: bool = False
+    notifications_email_smtp_host: str | None = None
+    notifications_email_smtp_port: int = 587
+    notifications_email_smtp_user: str | None = None
+    notifications_email_smtp_password: str | None = None
+    notifications_email_from: str | None = None
+    notifications_email_to: str | None = None
 
     @field_validator("data_provider", mode="before")
     @classmethod

@@ -30,3 +30,59 @@ export type SeasonAccuracyResponse = {
   championship: string
   points: SeasonAccuracyPoint[]
 }
+
+export type TeamToPlay = {
+  team: string
+  success_pct: number
+  strength_pct: number
+  form_pct: number
+}
+
+export type TeamsToPlayItem = {
+  championship: string
+  top3: TeamToPlay[]
+}
+
+export type TeamsToPlayResponse = {
+  generated_at_utc: string
+  items: TeamsToPlayItem[]
+}
+
+export type TrackBucket = {
+  n: number
+  accuracy: number
+  roi_avg: number
+}
+
+export type TrackSummary = {
+  n: number
+  accuracy: number
+  roi_total: number
+  roi_avg: number
+  by_confidence: Record<string, TrackBucket>
+}
+
+export type TrackPoint = {
+  date_utc: string
+  n: number
+  accuracy: number
+  roi_total: number
+}
+
+export type TrackRecordResponse = {
+  generated_at_utc: string
+  championship: string
+  days: number
+  summary: TrackSummary
+  points: TrackPoint[]
+}
+
+export type ExplainResponse = {
+  generated_at_utc: string
+  championship: string
+  match_id?: string | null
+  team: string
+  pick?: string | null
+  why: string[]
+  risks: string[]
+}

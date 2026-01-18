@@ -10,7 +10,8 @@ import {
   YAxis
 } from "recharts"
 
-import { apiUrl, fetchSeasonProgress, getApiBaseUrl } from "@/components/api/client"
+import type { ExplainResponse, TeamToPlay, TeamsToPlayResponse, TrackRecordResponse } from "@/components/api/types"
+import { apiUrl, fetchExplainMatch, fetchExplainTeam, fetchSeasonProgress, fetchTeamsToPlay, fetchTrackRecord, getApiBaseUrl } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
 
 type OverviewMatch = {
@@ -41,7 +42,7 @@ type ChampionshipsOverviewResponse = { generated_at_utc: string; championships: 
 
 const CHAMP_LABELS: Record<string, string> = {
   serie_a: "Serie A",
-  premier_league: "Premier",
+  premier_league: "Premier League",
   la_liga: "La Liga",
   bundesliga: "Bundesliga",
   eliteserien: "Eliteserien"
@@ -62,6 +63,20 @@ function clamp01(x: number) {
 
 function fmtPct(x: number) {
   return `${Math.round(clamp01(x) * 100)}%`
+}
+
+function fmtPct100(x: number) {
+  const n = Number(x)
+  if (!Number.isFinite(n)) return "n/d"
+  const v = n < 0 ? 0 : n > 100 ? 100 : n
+  return `${v.toFixed(1)}%`
+}
+
+function fmtSigned(x: number) {
+  const n = Number(x)
+  if (!Number.isFinite(n)) return "n/d"
+  const s = n >= 0 ? "+" : ""
+  return `${s}${n.toFixed(2)}`
 }
 
 function shortTeam(s: string) {
@@ -181,6 +196,21 @@ export function StatisticalPredictionsDashboard() {
   const [selectedChamp, setSelectedChamp] = useState<string>("serie_a")
   const [selectedMdKey, setSelectedMdKey] = useState<string>("")
   const [seasonAuc, setSeasonAuc] = useState<number | null>(null)
+  const [teamsToPlay, setTeamsToPlay] = useState<TeamsToPlayResponse | null>(null)
+  const [teamsToPlayError, setTeamsToPlayError] = useState<string | null>(null)
+  const [trackDays, setTrackDays] = useState<number>(120)
+  const [trackRecord, setTrackRecord] = useState<TrackRecordResponse | null>(null)
+  const [trackError, setTrackError] = useState<string | null>(null)
+
+  const [openTeamExplain, setOpenTeamExplain] = useState<string>("")
+  const [teamExplain, setTeamExplain] = useState<ExplainResponse | null>(null)
+  const [teamExplainError, setTeamExplainError] = useState<string | null>(null)
+  const [teamExplainLoading, setTeamExplainLoading] = useState<boolean>(false)
+
+  const [openMatchExplainId, setOpenMatchExplainId] = useState<string>("")
+  const [matchExplain, setMatchExplain] = useState<ExplainResponse | null>(null)
+  const [matchExplainError, setMatchExplainError] = useState<string | null>(null)
+  const [matchExplainLoading, setMatchExplainLoading] = useState<boolean>(false)
 
   useEffect(() => {
     let active = true
@@ -230,6 +260,47 @@ export function StatisticalPredictionsDashboard() {
     }
   }, [selectedChamp])
 
+  useEffect(() => {
+    let active = true
+    async function loadTeamsToPlay() {
+      try {
+        const res = await fetchTeamsToPlay()
+        if (!active) return
+        setTeamsToPlay(res)
+        setTeamsToPlayError(null)
+      } catch (e) {
+        if (!active) return
+        setTeamsToPlayError(String((e as Error)?.message ?? e))
+      }
+    }
+    loadTeamsToPlay()
+    const t = window.setInterval(loadTeamsToPlay, 60_000)
+    return () => {
+      active = false
+      window.clearInterval(t)
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    async function loadTrackRecord() {
+      try {
+        const res = await fetchTrackRecord(selectedChamp, trackDays)
+        if (!active) return
+        setTrackRecord(res)
+        setTrackError(null)
+      } catch (e) {
+        if (!active) return
+        setTrackError(String((e as Error)?.message ?? e))
+        setTrackRecord(null)
+      }
+    }
+    loadTrackRecord()
+    return () => {
+      active = false
+    }
+  }, [selectedChamp, trackDays])
+
   const champ = useMemo(() => {
     const list = overview ?? []
     const found = list.find((c) => c.championship === selectedChamp)
@@ -276,6 +347,71 @@ export function StatisticalPredictionsDashboard() {
   const matchesCount = toPlay.length
   const avgBest = matchesCount ? toPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
   const gaugeValue = avgBest
+  const teamsToPlayItem = useMemo(() => {
+    const items = teamsToPlay?.items ?? []
+    const target = String(champ?.title ?? CHAMP_LABELS[selectedChamp] ?? "").trim().toLowerCase()
+    if (!target) return null
+    return items.find((i) => String(i.championship ?? "").trim().toLowerCase() === target) ?? null
+  }, [champ?.title, selectedChamp, teamsToPlay?.items])
+
+  const trackSeries = useMemo(() => {
+    const pts = trackRecord?.points ?? []
+    return pts.map((p) => {
+      const dt = new Date(String(p.date_utc))
+      const label = Number.isNaN(dt.getTime())
+        ? String(p.date_utc)
+        : dt.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" })
+      return { date: label, accuracy: clamp01(Number(p.accuracy ?? 0)), roi_total: Number(p.roi_total ?? 0), n: Number(p.n ?? 0) }
+    })
+  }, [trackRecord?.points])
+
+  async function toggleExplainTeam(team: string) {
+    const key = String(team ?? "").trim()
+    if (!key) return
+    if (openTeamExplain === key) {
+      setOpenTeamExplain("")
+      setTeamExplain(null)
+      setTeamExplainError(null)
+      setTeamExplainLoading(false)
+      return
+    }
+    setOpenTeamExplain(key)
+    setTeamExplain(null)
+    setTeamExplainError(null)
+    setTeamExplainLoading(true)
+    try {
+      const res = await fetchExplainTeam(selectedChamp, key)
+      setTeamExplain(res)
+    } catch (e) {
+      setTeamExplainError(String((e as Error)?.message ?? e))
+    } finally {
+      setTeamExplainLoading(false)
+    }
+  }
+
+  async function toggleExplainMatch(matchId: string) {
+    const key = String(matchId ?? "").trim()
+    if (!key) return
+    if (openMatchExplainId === key) {
+      setOpenMatchExplainId("")
+      setMatchExplain(null)
+      setMatchExplainError(null)
+      setMatchExplainLoading(false)
+      return
+    }
+    setOpenMatchExplainId(key)
+    setMatchExplain(null)
+    setMatchExplainError(null)
+    setMatchExplainLoading(true)
+    try {
+      const res = await fetchExplainMatch(key)
+      setMatchExplain(res)
+    } catch (e) {
+      setMatchExplainError(String((e as Error)?.message ?? e))
+    } finally {
+      setMatchExplainLoading(false)
+    }
+  }
 
   if (error) {
     const apiLabel = getApiBaseUrl() || "same-origin"
@@ -310,7 +446,10 @@ export function StatisticalPredictionsDashboard() {
             FOOTBALL LEAGUE ANALYTICS & FORECASTS
           </div>
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-            {title} · {selectedMd?.matchday_label ?? "Giornata"} · ROC-AUC {seasonAuc == null ? "n/d" : seasonAuc.toFixed(3)}
+            {title} · {selectedMd?.matchday_label ?? "Giornata"} · ROC-AUC {seasonAuc == null ? "n/d" : seasonAuc.toFixed(3)} · Track{" "}
+            {trackRecord?.summary?.n
+              ? `${fmtPct(Number(trackRecord.summary.accuracy ?? 0))} · ROI avg ${fmtSigned(Number(trackRecord.summary.roi_avg ?? 0))}`
+              : "n/d"}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -413,6 +552,7 @@ export function StatisticalPredictionsDashboard() {
                   const px = safeProb(m, "draw")
                   const p2 = safeProb(m, "away_win")
                   const kickoffLabel = formatKickoff(m.kickoff_unix)
+                  const open = openMatchExplainId === m.match_id
                   return (
                     <div
                       key={m.match_id}
@@ -428,8 +568,22 @@ export function StatisticalPredictionsDashboard() {
                             Conf {fmtPct(bestProb(m))} · {m.status}
                           </div>
                         </div>
-                        <div className="shrink-0 text-right text-xs font-semibold text-zinc-900 dark:text-zinc-50">
-                          {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
+                        <div className="shrink-0 flex flex-col items-end gap-2 text-right">
+                          <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                            {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleExplainMatch(m.match_id)}
+                            className={[
+                              "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                              open
+                                ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                                : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                            ].join(" ")}
+                          >
+                            Perché?
+                          </button>
                         </div>
                       </div>
                       <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/30">
@@ -439,6 +593,37 @@ export function StatisticalPredictionsDashboard() {
                           <div className="grid place-items-center bg-rose-500/70" style={{ width: `${Math.round(p2 * 100)}%` }}>2</div>
                         </div>
                       </div>
+                      {open ? (
+                        <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                          {matchExplainLoading ? (
+                            <div>Caricamento…</div>
+                          ) : matchExplainError ? (
+                            <div>{matchExplainError}</div>
+                          ) : !matchExplain ? (
+                            <div>n/d</div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="font-semibold text-zinc-900 dark:text-zinc-50">
+                                {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
+                                {matchExplain.pick ? <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span> : null}
+                              </div>
+                              <div className="space-y-1">
+                                {(matchExplain.why ?? []).map((t, i) => (
+                                  <div key={`why-${i}`}>• {t}</div>
+                                ))}
+                              </div>
+                              {(matchExplain.risks ?? []).length ? (
+                                <div className="space-y-1">
+                                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
+                                  {(matchExplain.risks ?? []).map((t, i) => (
+                                    <div key={`risk-${i}`}>• {t}</div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   )
                 })
@@ -466,49 +651,242 @@ export function StatisticalPredictionsDashboard() {
           </Card>
         </div>
 
-        <Card className="lg:col-span-3 !bg-white/10 !p-4 dark:!bg-zinc-950/25">
-          <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Stats & Trends</div>
-          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Metriche derivate dal modello</div>
-
-          <div className="mt-4 space-y-3">
-            <MetricRow label="Goal Averages" value={`${stats.xg.toFixed(2)} goals/match`} accent={activeColor} />
-            <MetricRow label="BTTS" value={fmtPct(stats.btts)} accent="#3b82f6" />
-            <MetricRow label="Over 2.5 Goals" value={fmtPct(stats.over25)} accent="#f59e0b" />
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-white/10 bg-white/10 p-4 dark:bg-zinc-950/20">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Confidence Index</div>
-              <div className="text-[11px] text-zinc-600 dark:text-zinc-300">{selectedMd?.matchday_label ?? "Giornata"}</div>
+        <div className="lg:col-span-3 space-y-4">
+          <Card className="!bg-white/10 !p-4 dark:!bg-zinc-950/25">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Squadre da giocare</div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title="success_score = 65% forza squadra (Elo) + 35% forma recente (ultimi 8 match FINISHED)"
+                  >
+                    Top 3 per % successo <span className="text-[11px] text-zinc-500 dark:text-zinc-400">ⓘ</span>
+                  </span>
+                </div>
+              </div>
+              <div className="shrink-0 text-right text-[11px] text-zinc-600 dark:text-zinc-300">
+                {teamsToPlay?.generated_at_utc ? new Date(String(teamsToPlay.generated_at_utc)).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : ""}
+              </div>
             </div>
-            <div className="mt-4 flex items-center justify-center">
-              <Gauge value={gaugeValue} />
-            </div>
-          </div>
 
-          <div className="mt-5 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
-            <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Power Rankings</div>
-            <div className="mt-2 space-y-2">
-              {power.length ? (
-                power.map((r, idx) => (
-                  <div key={r.team} className="flex items-center justify-between gap-3 text-xs">
-                    <div className="min-w-0 truncate text-zinc-800 dark:text-zinc-100">
-                      {idx + 1}. {r.team}
+            <div className="mt-4 space-y-2">
+              {teamsToPlayItem?.top3?.length ? (
+                [...teamsToPlayItem.top3]
+                  .slice()
+                  .sort((a: TeamToPlay, b: TeamToPlay) => Number(b.success_pct ?? 0) - Number(a.success_pct ?? 0))
+                  .map((t: TeamToPlay, idx: number) => {
+                    const teamKey = String(t.team ?? "").trim()
+                    const open = openTeamExplain === teamKey
+                    const explainOk = !!teamExplain && String(teamExplain.team ?? "").trim() === teamKey
+                    return (
+                    <div
+                      key={`${teamKey}-${idx}`}
+                      className="rounded-2xl border border-white/10 bg-white/10 px-3 py-3 backdrop-blur-md dark:bg-zinc-950/20"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">{teamKey}</div>
+                            {idx === 0 ? (
+                              <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                Top pick
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                            Forza {fmtPct100(t.strength_pct)} · Forma {fmtPct100(t.form_pct)}
+                          </div>
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-2">
+                          <div className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-semibold text-zinc-900 dark:bg-zinc-950/15 dark:text-zinc-50">
+                            {fmtPct100(t.success_pct)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleExplainTeam(teamKey)}
+                            className={[
+                              "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                              open
+                                ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                                : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                            ].join(" ")}
+                          >
+                            Perché?
+                          </button>
+                        </div>
+                      </div>
+                      {open ? (
+                        <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                          {teamExplainLoading ? (
+                            <div>Caricamento…</div>
+                          ) : teamExplainError ? (
+                            <div>{teamExplainError}</div>
+                          ) : !explainOk ? (
+                            <div>n/d</div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="font-semibold text-zinc-900 dark:text-zinc-50">
+                                {teamExplain.team ? `Perché ${teamExplain.team}` : "Perché"}
+                              </div>
+                              <div className="space-y-1">
+                                {(teamExplain.why ?? []).map((x, i) => (
+                                  <div key={`t-why-${i}`}>• {x}</div>
+                                ))}
+                              </div>
+                              {(teamExplain.risks ?? []).length ? (
+                                <div className="space-y-1">
+                                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
+                                  {(teamExplain.risks ?? []).map((x, i) => (
+                                    <div key={`t-risk-${i}`}>• {x}</div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
-                      {r.pts.toFixed(2)}
-                    </div>
-                  </div>
-                ))
+                    )
+                  })
+              ) : teamsToPlayError ? (
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">{teamsToPlayError}</div>
               ) : (
                 <div className="text-xs text-zinc-600 dark:text-zinc-300">n/d</div>
               )}
             </div>
-          </div>
-        </Card>
+          </Card>
+
+          <Card className="!bg-white/10 !p-4 dark:!bg-zinc-950/25">
+            <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Stats & Trends</div>
+            <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Metriche derivate dal modello</div>
+
+            <div className="mt-4 space-y-3">
+              <MetricRow label="Goal Averages" value={`${stats.xg.toFixed(2)} goals/match`} accent={activeColor} />
+              <MetricRow label="BTTS" value={fmtPct(stats.btts)} accent="#3b82f6" />
+              <MetricRow label="Over 2.5 Goals" value={fmtPct(stats.over25)} accent="#f59e0b" />
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/10 p-4 dark:bg-zinc-950/20">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Confidence Index</div>
+                <div className="text-[11px] text-zinc-600 dark:text-zinc-300">{selectedMd?.matchday_label ?? "Giornata"}</div>
+              </div>
+              <div className="mt-4 flex items-center justify-center">
+                <Gauge value={gaugeValue} />
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+              <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">Power Rankings</div>
+              <div className="mt-2 space-y-2">
+                {power.length ? (
+                  power.map((r, idx) => (
+                    <div key={r.team} className="flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0 truncate text-zinc-800 dark:text-zinc-100">
+                        {idx + 1}. {r.team}
+                      </div>
+                      <div className="shrink-0 rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
+                        {r.pts.toFixed(2)}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs text-zinc-600 dark:text-zinc-300">n/d</div>
+                )}
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
 
       <div className="mt-4">
+        <Card className="!bg-white/10 dark:!bg-zinc-950/25">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Track Record</div>
+              <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Accuracy e ROI simulato nel tempo</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={String(trackDays)}
+                onChange={(e) => setTrackDays(Number(e.target.value))}
+                className="rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-xs text-zinc-900 shadow-sm backdrop-blur-md dark:bg-zinc-950/35 dark:text-zinc-50"
+                aria-label="Finestra storico"
+              >
+                <option value="30">30g</option>
+                <option value="90">90g</option>
+                <option value="120">120g</option>
+                <option value="180">180g</option>
+                <option value="365">365g</option>
+              </select>
+              <div className="rounded-full border border-white/10 bg-white/10 px-3 py-2 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                {trackRecord?.summary?.n ? (
+                  <span>
+                    N {trackRecord.summary.n} · Acc {fmtPct(Number(trackRecord.summary.accuracy ?? 0))} · ROI tot {fmtSigned(Number(trackRecord.summary.roi_total ?? 0))}
+                  </span>
+                ) : trackError ? (
+                  <span>{trackError}</span>
+                ) : (
+                  <span>n/d</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+              <div className="text-[10px] uppercase tracking-wide text-zinc-600 dark:text-zinc-300">High confidence</div>
+              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {trackRecord?.summary?.by_confidence?.high?.n
+                  ? `${fmtPct(Number(trackRecord.summary.by_confidence.high.accuracy ?? 0))} · ROI ${fmtSigned(Number(trackRecord.summary.by_confidence.high.roi_avg ?? 0))}`
+                  : "n/d"}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+              <div className="text-[10px] uppercase tracking-wide text-zinc-600 dark:text-zinc-300">Medium confidence</div>
+              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {trackRecord?.summary?.by_confidence?.medium?.n
+                  ? `${fmtPct(Number(trackRecord.summary.by_confidence.medium.accuracy ?? 0))} · ROI ${fmtSigned(Number(trackRecord.summary.by_confidence.medium.roi_avg ?? 0))}`
+                  : "n/d"}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+              <div className="text-[10px] uppercase tracking-wide text-zinc-600 dark:text-zinc-300">Low confidence</div>
+              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {trackRecord?.summary?.by_confidence?.low?.n
+                  ? `${fmtPct(Number(trackRecord.summary.by_confidence.low.accuracy ?? 0))} · ROI ${fmtSigned(Number(trackRecord.summary.by_confidence.low.roi_avg ?? 0))}`
+                  : "n/d"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 h-56 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+            {trackSeries.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trackSeries}>
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="acc" domain={[0, 1]} tickFormatter={(v) => `${Math.round(Number(v) * 100)}%`} />
+                  <YAxis yAxisId="roi" orientation="right" tickFormatter={(v) => fmtSigned(Number(v))} />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      if (name === "accuracy") return [fmtPct(Number(value)), "Accuracy"]
+                      if (name === "roi_total") return [fmtSigned(Number(value)), "ROI tot"]
+                      return [String(value), String(name)]
+                    }}
+                  />
+                  <Line yAxisId="acc" type="monotone" dataKey="accuracy" stroke="#22c55e" strokeWidth={2} dot={false} />
+                  <Line yAxisId="roi" type="monotone" dataKey="roi_total" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-zinc-600 dark:text-zinc-300">
+                {trackError ? trackError : "n/d"}
+              </div>
+            )}
+          </div>
+        </Card>
+
         <Card className="!bg-white/10 dark:!bg-zinc-950/25">
           <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Performance Comparison</div>
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Confronto rapido tra leghe (giornata selezionata)</div>

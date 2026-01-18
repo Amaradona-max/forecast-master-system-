@@ -1,4 +1,4 @@
-import type { MatchUpdate, SeasonAccuracyResponse } from "@/components/api/types"
+import type { ExplainResponse, MatchUpdate, SeasonAccuracyResponse, TeamsToPlayResponse, TrackRecordResponse } from "@/components/api/types"
 
 function normalizeApiBaseUrl(raw: string | undefined | null) {
   const base = String(raw ?? "").trim()
@@ -53,5 +53,35 @@ export async function fetchSeasonProgress(championship: string = "all"): Promise
 export async function fetchLiveProbabilities(matchId: string): Promise<MatchUpdate> {
   const res = await fetch(apiUrl(`/api/v1/live/${encodeURIComponent(matchId)}/probabilities`), { cache: "no-store" })
   if (!res.ok) throw new Error(`live_probabilities_failed:${res.status}`)
+  return res.json()
+}
+
+export async function fetchTeamsToPlay(): Promise<TeamsToPlayResponse> {
+  const res = await fetch(apiUrl("/api/v1/insights/teams-to-play"), { cache: "no-store" })
+  if (!res.ok) throw new Error(`teams_to_play_failed:${res.status}`)
+  return res.json()
+}
+
+export async function fetchTrackRecord(championship: string = "all", days: number = 120): Promise<TrackRecordResponse> {
+  const res = await fetch(
+    apiUrl(`/api/v1/history/track-record?championship=${encodeURIComponent(championship)}&days=${encodeURIComponent(String(days))}`),
+    { cache: "no-store" }
+  )
+  if (!res.ok) throw new Error(`track_record_failed:${res.status}`)
+  return res.json()
+}
+
+export async function fetchExplainTeam(championship: string, team: string): Promise<ExplainResponse> {
+  const res = await fetch(
+    apiUrl(`/api/v1/explain/team?championship=${encodeURIComponent(championship)}&team=${encodeURIComponent(team)}`),
+    { cache: "no-store" }
+  )
+  if (!res.ok) throw new Error(`explain_team_failed:${res.status}`)
+  return res.json()
+}
+
+export async function fetchExplainMatch(matchId: string): Promise<ExplainResponse> {
+  const res = await fetch(apiUrl(`/api/v1/explain/match?match_id=${encodeURIComponent(matchId)}`), { cache: "no-store" })
+  if (!res.ok) throw new Error(`explain_match_failed:${res.status}`)
   return res.json()
 }

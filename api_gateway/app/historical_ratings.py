@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +10,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+try:
+    import certifi  # type: ignore
+
+    _CERTIFI_CAFILE = certifi.where()
+except Exception:
+    _CERTIFI_CAFILE = None
 
 
 @dataclass(frozen=True)
@@ -23,7 +31,14 @@ class HistoricalMatch:
 
 def _http_get_json(url: str, *, headers: dict[str, str]) -> Any:
     req = Request(url, headers=headers, method="GET")
-    with urlopen(req, timeout=45) as resp:
+    context = None
+    if str(url).lower().startswith("https://"):
+        cafile = _CERTIFI_CAFILE
+        try:
+            context = ssl.create_default_context(cafile=cafile) if cafile else ssl.create_default_context()
+        except Exception:
+            context = None
+    with urlopen(req, timeout=45, context=context) as resp:
         raw = resp.read().decode("utf-8")
     return json.loads(raw)
 
@@ -113,6 +128,62 @@ def fetch_finished_matches_for_season(
     return out
 
 
+def fetch_finished_matches_for_range_football_data(
+    *,
+    championship: str,
+    competition_code: str,
+    date_from_iso: str,
+    date_to_iso: str,
+    api_base_url: str,
+    api_key: str,
+) -> list[HistoricalMatch]:
+    headers = {"X-Auth-Token": api_key, "Accept": "application/json", "User-Agent": "Forecast Master System API"}
+    qs = urlencode({"dateFrom": str(date_from_iso), "dateTo": str(date_to_iso)})
+    url = f"{api_base_url.rstrip('/')}/competitions/{competition_code}/matches?{qs}"
+    payload = _http_get_json(url, headers=headers)
+    items = payload.get("matches") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    out: list[HistoricalMatch] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if str(it.get("status") or "").upper() != "FINISHED":
+            continue
+
+        kickoff_unix = _parse_kickoff_unix(it.get("utcDate"))
+        if kickoff_unix is None:
+            continue
+
+        home = it.get("homeTeam") if isinstance(it.get("homeTeam"), dict) else {}
+        away = it.get("awayTeam") if isinstance(it.get("awayTeam"), dict) else {}
+        home_team = str(home.get("name") or "").strip()
+        away_team = str(away.get("name") or "").strip()
+        if not home_team or not away_team:
+            continue
+
+        score = it.get("score") if isinstance(it.get("score"), dict) else {}
+        full = score.get("fullTime") if isinstance(score.get("fullTime"), dict) else {}
+        hg = _safe_int(full.get("home"))
+        ag = _safe_int(full.get("away"))
+        if hg is None or ag is None:
+            continue
+
+        out.append(
+            HistoricalMatch(
+                championship=championship,
+                kickoff_unix=float(kickoff_unix),
+                home_team=home_team,
+                away_team=away_team,
+                home_goals=int(hg),
+                away_goals=int(ag),
+            )
+        )
+    out.sort(key=lambda m: m.kickoff_unix)
+    return out
+
+
 def _expected_score(r_home: float, r_away: float, home_adv_points: float) -> float:
     return 1.0 / (1.0 + 10 ** ((r_away - (r_home + home_adv_points)) / 400.0))
 
@@ -170,7 +241,9 @@ def build_elo_strengths(
 def write_ratings_file(*, path: str, payload: dict[str, Any]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
 
 
 def build_ratings_payload(

@@ -66,9 +66,9 @@ def _extract_result(m: object) -> tuple[dict[str, float], str] | None:
     return ({"home_win": p1, "draw": px, "away_win": p2}, outcome)
 
 
-def _metrics(rows: list[tuple[dict[str, float], str]]) -> tuple[float, float, float]:
+def _metrics(rows: list[tuple[dict[str, float], str]]) -> tuple[float, float, float, float]:
     if not rows:
-        return (0.0, 0.0, 0.0)
+        return (0.0, 0.0, 0.0, 0.0)
 
     brier_sum = 0.0
     ll_sum = 0.0
@@ -88,7 +88,9 @@ def _metrics(rows: list[tuple[dict[str, float], str]]) -> tuple[float, float, fl
             correct += 1
 
     n = float(len(rows))
-    return (brier_sum / n, ll_sum / n, correct / n)
+    acc = correct / n
+    roi_avg = (2.0 * float(acc)) - 1.0
+    return (brier_sum / n, ll_sum / n, float(acc), float(roi_avg))
 
 
 def _calibration_bins(rows: list[tuple[dict[str, float], str]], bins: int = 10) -> tuple[list[CalibrationBin], float]:
@@ -167,7 +169,7 @@ def _latest_finished_rows(matches: list[object], championship: str, window: int 
 
 def _build_calibration_metrics(*, matches: list[object], championship: str, window: int | None) -> CalibrationWindowMetrics:
     rows = _latest_finished_rows(matches, championship, window)
-    brier, log_loss, _acc = _metrics(rows)
+    brier, log_loss, _acc, _roi = _metrics(rows)
     bins, ece = _calibration_bins(rows, bins=10)
     win: int | str = "season" if window is None else int(window)
     return CalibrationWindowMetrics(window=win, n=int(len(rows)), log_loss=float(log_loss), brier=float(brier), ece=float(ece), bins=bins)
@@ -179,7 +181,7 @@ async def season_progress(request: Request, championship: str = "all") -> Season
     state = request.app.state.app_state
     matches = await state.list_matches()
     points: list[SeasonAccuracyPoint] = []
-    prev = (0.0, 0.0, 0.0)
+    prev = (0.0, 0.0, 0.0, 0.0)
     for i in range(14, -1, -1):
         dt = now - timedelta(days=i)
         day_start = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc).timestamp()
@@ -204,11 +206,11 @@ async def season_progress(request: Request, championship: str = "all") -> Season
                 continue
             rows.append(extracted)
 
-        brier, log_loss, acc = _metrics(rows)
+        brier, log_loss, acc, roi_avg = _metrics(rows)
         if not rows:
-            brier, log_loss, acc = prev
+            brier, log_loss, acc, roi_avg = prev
         else:
-            prev = (brier, log_loss, acc)
+            prev = (brier, log_loss, acc, roi_avg)
 
         points.append(
             SeasonAccuracyPoint(
@@ -216,7 +218,7 @@ async def season_progress(request: Request, championship: str = "all") -> Season
                 brier=float(brier),
                 log_loss=float(log_loss),
                 roc_auc=float(acc),
-                roi_simulated=0.0,
+                roi_simulated=float(roi_avg),
             )
         )
     return SeasonAccuracyResponse(championship=championship, points=points)

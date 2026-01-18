@@ -68,6 +68,30 @@ async def batch_predictions(req: BatchPredictionRequest, request: Request, respo
         probs = dict(result.probabilities or {})
         live.update(probabilities=probs, meta={"context": context0, "explain": result.explain, "confidence": result.confidence, "ranges": result.ranges})
         await state.upsert_match(live)
+        try:
+            p1 = float(probs.get("home_win", 0.0) or 0.0)
+            px = float(probs.get("draw", 0.0) or 0.0)
+            p2 = float(probs.get("away_win", 0.0) or 0.0)
+            pick = "home_win" if (p1 >= px and p1 >= p2) else "draw" if (px >= p1 and px >= p2) else "away_win"
+            p_pick = float(probs.get(pick, 0.0) or 0.0)
+            conf = float(result.confidence) if isinstance(result.confidence, (int, float)) else 0.0
+            if conf < 0.0:
+                conf = 0.0
+            if conf > 1.0:
+                conf = 1.0
+            await state.upsert_prediction_history(
+                match_id=str(live.match_id),
+                championship=str(live.championship),
+                home_team=str(live.home_team),
+                away_team=str(live.away_team),
+                market="1X2",
+                predicted_pick=str(pick),
+                predicted_prob=float(p_pick),
+                confidence=float(conf),
+                kickoff_unix=float(live.kickoff_unix) if isinstance(live.kickoff_unix, (int, float)) else None,
+            )
+        except Exception:
+            pass
 
         predictions.append(
             MatchPrediction(

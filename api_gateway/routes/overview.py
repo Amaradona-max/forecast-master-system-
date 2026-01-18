@@ -124,16 +124,34 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         present = {m.championship for m in matches}
         missing_champs = [c for c in champs if c not in present]
 
-    if (not matches or missing_champs) and err is None:
-        now_unix0 = datetime.now(timezone.utc).timestamp()
-        last_attempt = getattr(request.app.state, "_seed_attempted_unix", 0.0)
-        if not isinstance(last_attempt, (int, float)):
-            last_attempt = 0.0
-        seed_interval = 60.0
-        if provider == "football_data":
-            seed_interval = 600.0 if os.getenv("VERCEL") else 300.0
-        if (now_unix0 - float(last_attempt)) >= seed_interval:
-            request.app.state._seed_attempted_unix = now_unix0
+    now_unix0 = datetime.now(timezone.utc).timestamp()
+    if err is None:
+        last_refresh = getattr(request.app.state, "_refresh_seed_attempted_unix", 0.0)
+        if not isinstance(last_refresh, (int, float)):
+            last_refresh = 0.0
+        refresh_interval = float(getattr(settings, "fixtures_refresh_interval_seconds", 600) or 600)
+        if provider in {"local_files", "mock"}:
+            refresh_interval = 60.0
+        refresh_due = (now_unix0 - float(last_refresh)) >= refresh_interval
+
+        last_season = getattr(request.app.state, "_season_seed_attempted_unix", 0.0)
+        if not isinstance(last_season, (int, float)):
+            last_season = 0.0
+        season_interval = float(getattr(settings, "fixtures_season_interval_seconds", 86400) or 86400)
+        season_due = (now_unix0 - float(last_season)) >= season_interval
+
+        if provider == "football_data" and (not matches or missing_champs) and season_due:
+            request.app.state._season_seed_attempted_unix = now_unix0
+            try:
+                from api_gateway.main import _seed_from_football_data_season  # type: ignore
+
+                await _seed_from_football_data_season(request.app.state.app_state, request.app.state.ws_hub)
+            except Exception:
+                pass
+            matches = await state.list_matches()
+
+        if (not matches or missing_champs or refresh_due) and refresh_due:
+            request.app.state._refresh_seed_attempted_unix = now_unix0
             try:
                 if provider == "api_football":
                     from api_gateway.main import _seed_from_api_football  # type: ignore
@@ -155,7 +173,7 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
                 pass
             matches = await state.list_matches()
     now_unix = datetime.now(timezone.utc).timestamp()
-    predictions_start_unix = datetime(2026, 1, 14, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
+    predictions_start_unix = datetime(2025, 8, 1, tzinfo=timezone.utc).timestamp() if settings.real_data_only else 0.0
     if provider == "api_football" and not matches:
         detail = getattr(request.app.state, "data_error", None) or "api_football_no_matches"
         raise HTTPException(status_code=503, detail=str(detail))
