@@ -138,6 +138,15 @@ class AppState:
                 meta = json.loads(r[10]) if isinstance(r[10], str) else {}
             except Exception:
                 meta = {}
+            if bool(getattr(settings, "real_data_only", False)):
+                ctx = meta.get("context") if isinstance(meta, dict) else None
+                if not isinstance(ctx, dict):
+                    continue
+                src = ctx.get("source") if isinstance(ctx.get("source"), dict) else None
+                if not isinstance(src, dict):
+                    continue
+                if str(src.get("provider") or "").strip() != "football_data":
+                    continue
             m = LiveMatchState(
                 match_id=str(r[0]),
                 championship=str(r[1]),
