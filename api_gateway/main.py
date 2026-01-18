@@ -91,7 +91,7 @@ async def _run_cpu_with_deadline(fn, /, *args: Any, **kwargs: Any):
 
 def _effective_data_provider() -> str:
     provider = str(getattr(settings, "data_provider", "") or "").strip()
-    if provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
+    if not settings.real_data_only and provider == "api_football" and bool(getattr(settings, "football_data_key", None)):
         return "football_data"
     return provider
 
@@ -134,9 +134,11 @@ async def startup() -> None:
         with contextlib.suppress(Exception):
             recover_corrupt_sqlite_db(db_path=cache_db_path())
     provider = _effective_data_provider()
-    if settings.real_data_only and provider == "mock":
-        app.state.data_error = "real_data_provider_required"
+    if settings.real_data_only and provider != "football_data":
+        app.state.data_error = "real_data_only_requires_football_data_provider"
         return
+    if settings.real_data_only:
+        await app.state.app_state.clear_all()
     if provider == "mock":
         await _seed_from_mock(app.state.app_state, app.state.ws_hub)
     if provider == "api_football":
@@ -801,6 +803,10 @@ async def _seed_from_football_data(state: AppState, hub: WebSocketHub) -> None:
                 )
                 m.update(probabilities=result0.probabilities, meta={"context": context0, "explain": result0.explain, "confidence": result0.confidence, "ranges": result0.ranges})
             except Exception as e:
+                last_error = f"football_data_prediction_failed:{type(e).__name__}"
+                if settings.real_data_only:
+                    app.state.data_error = last_error
+                    continue
                 m.update(
                     probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3},
                     meta={"context": context0, "explain": {"error": "prediction_failed", "error_type": type(e).__name__}},

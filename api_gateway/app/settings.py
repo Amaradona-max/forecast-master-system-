@@ -2,7 +2,7 @@ import json
 import os
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -51,6 +51,30 @@ class Settings(BaseSettings):
     historical_end_season: int = 2025
     local_data_dir: str = ".."
     local_calendar_filename: str = "Calendari_Calcio_2025_2026.xlsx"
+
+    @field_validator("data_provider", mode="before")
+    @classmethod
+    def _normalize_data_provider(cls, v: object) -> object:
+        if v is None:
+            return v
+        s = str(v).strip()
+        return s.lower()
+
+    @model_validator(mode="after")
+    def _enforce_real_data_only(self) -> "Settings":
+        if not bool(self.real_data_only):
+            return self
+
+        if str(self.data_provider or "").strip().lower() != "football_data":
+            raise ValueError("real_data_only_requires_football_data_provider")
+
+        if not str(self.football_data_key or "").strip():
+            raise ValueError("football_data_key_missing")
+
+        if not isinstance(self.football_data_competition_codes, dict) or not self.football_data_competition_codes:
+            raise ValueError("football_data_config_missing")
+
+        return self
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
