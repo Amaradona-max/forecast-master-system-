@@ -27,10 +27,13 @@ import {
   updateUserProfile
 } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
+import { useLocalStorage } from "@/lib/useLocalStorage"
 
 type OverviewMatch = {
   match_id: string
   championship: string
+  league?: string
+  competition?: string
   home_team: string
   away_team: string
   status: string
@@ -41,6 +44,7 @@ type OverviewMatch = {
   confidence: number
   explain?: Record<string, unknown>
   final_score?: { home: number; away: number } | null
+  _from_watchlist_only?: boolean
 }
 
 type MatchdayBlock = { matchday_number?: number | null; matchday_label: string; matches: OverviewMatch[] }
@@ -347,6 +351,16 @@ function champOrderKey(champ: string) {
 }
 
 export function StatisticalPredictionsDashboard() {
+  type WatchItem = {
+    id: string
+    home: string
+    away: string
+    kickoff_unix?: number
+    league?: string
+    pinned?: boolean
+  }
+
+  const [watchlist, setWatchlist] = useLocalStorage<WatchItem[]>("fm_watchlist_v1", [])
   const [overview, setOverview] = useState<ChampionshipOverview[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [systemStatus, setSystemStatus] = useState<{ data_provider: string; data_error?: string | null; football_data_key_present: boolean; api_football_key_present: boolean } | null>(null)
@@ -365,6 +379,17 @@ export function StatisticalPredictionsDashboard() {
   const [mobileControlsOpen, setMobileControlsOpen] = useState<boolean>(false)
   const [matchQuery, setMatchQuery] = useState<string>("")
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
+  const [watchSearch, setWatchSearch] = useState<string>("")
+  const [watchShowAll, setWatchShowAll] = useState<boolean>(false)
+  const [watchModalOpen, setWatchModalOpen] = useState<boolean>(false)
+  const [uiNotice, setUiNotice] = useState<string>("")
+
+  const showUINotice = (msg: string) => {
+    setUiNotice(msg)
+    window.setTimeout(() => {
+      setUiNotice("")
+    }, 2500)
+  }
 
   const [openTeamExplain, setOpenTeamExplain] = useState<string>("")
   const [teamExplain, setTeamExplain] = useState<ExplainResponse | null>(null)
@@ -380,6 +405,198 @@ export function StatisticalPredictionsDashboard() {
   const [multiMarketLoading, setMultiMarketLoading] = useState<boolean>(false)
   const [selectedMarketKey, setSelectedMarketKey] = useState<string>("")
   const openMatchExplainIdRef = useRef<string>("")
+
+  type WatchMatchLike = {
+    home_team?: unknown
+    away_team?: unknown
+    kickoff_unix?: unknown
+    kickoff?: unknown
+    league?: unknown
+    competition?: unknown
+    championship?: unknown
+  }
+
+  const matchId = (m: WatchMatchLike) => {
+    const home = String(m?.home_team ?? "")
+    const away = String(m?.away_team ?? "")
+    const ko = m?.kickoff_unix ?? m?.kickoff ?? ""
+    if (!home && !away && !ko) return ""
+    return `${home}__${away}__${ko}`
+  }
+
+  const toFallbackMatch = (w: WatchItem): OverviewMatch & { _from_watchlist_only: true } => {
+    return {
+      match_id: w.id,
+      championship: "",
+      league: w.league,
+      competition: w.league,
+      home_team: w.home,
+      away_team: w.away,
+      status: "SAVED",
+      matchday: null,
+      kickoff_unix: w.kickoff_unix ?? null,
+      updated_at_unix: Math.floor(Date.now() / 1000),
+      probabilities: {},
+      confidence: 0,
+      final_score: null,
+      _from_watchlist_only: true
+    }
+  }
+
+  const isHistorical = (m: unknown) => {
+    const obj = m as { _from_watchlist_only?: unknown } | null | undefined
+    return Boolean(obj?._from_watchlist_only)
+  }
+
+  const isWatched = (m: WatchMatchLike) => watchlist.some((w) => w.id === matchId(m))
+
+  const toggleWatch = (m: WatchMatchLike) => {
+    const id = matchId(m)
+    if (!id) return
+
+    if (watchlist.some((w) => w.id === id)) {
+      setWatchlist(watchlist.filter((w) => w.id !== id))
+      return
+    }
+
+    const item: WatchItem = {
+      id,
+      home: String(m.home_team ?? ""),
+      away: String(m.away_team ?? ""),
+      kickoff_unix: Number(m.kickoff_unix ?? NaN),
+      league: String(m.league ?? m.competition ?? m.championship ?? ""),
+      pinned: false
+    }
+    setWatchlist([item, ...watchlist].slice(0, 20))
+  }
+
+  const pinnedCount = watchlist.filter((w) => w.pinned).length
+
+  const isPinned = (m: WatchMatchLike) => {
+    const id = matchId(m)
+    return watchlist.some((w) => w.id === id && w.pinned)
+  }
+
+  const togglePin = (m: WatchMatchLike) => {
+    const id = matchId(m)
+    if (!id) return
+
+    const currentlyPinned = isPinned(m)
+    if (!currentlyPinned && pinnedCount >= 3) {
+      showUINotice("Hai già 3 PIN attivi. Rimuovine uno per aggiungerne un altro.")
+      return
+    }
+
+    setWatchlist(watchlist.map((w) => (w.id === id ? { ...w, pinned: !currentlyPinned } : w)))
+  }
+
+  const isLiveMatch = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    if (obj?.is_live === true) return true
+    const s = String(obj?.status ?? obj?.match_status ?? "").toLowerCase()
+    if (["live", "inplay", "in_play", "in-play", "playing"].includes(s)) return true
+    const minute = Number(obj?.minute ?? obj?.match_minute ?? 0)
+    if (Number.isFinite(minute) && minute > 0) return true
+    return false
+  }
+
+  const confValue = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const c = obj?.confidence ?? obj?.model_confidence ?? obj?.prediction_confidence
+    return typeof c === "number" ? clamp01(c) : 0
+  }
+
+  const badgeList = (m: unknown) => {
+    const badges: { label: string; kind: "live" | "top" | "conf" }[] = []
+
+    const db = dayBadge(m)
+    if (db) badges.unshift({ label: db, kind: "top" })
+
+    if (isLiveMatch(m)) badges.push({ label: "LIVE", kind: "live" })
+
+    const p = bestProb(m as OverviewMatch)
+    if (p >= 0.7) badges.push({ label: "TOP", kind: "top" })
+
+    const c = confValue(m)
+    if (c >= 0.75) badges.push({ label: "CONF", kind: "conf" })
+
+    const sb = soonBadge(m)
+    if (sb) badges.push({ label: sb, kind: "live" })
+
+    const kb = kickoffBadge(m)
+    if (kb) badges.push({ label: kb, kind: "conf" })
+
+    return badges
+  }
+
+  const kickoffUnix = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const k = obj?.kickoff_unix ?? obj?.kickoff ?? obj?.start_time_unix ?? null
+    const n = Number(k)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+
+  const minutesToKickoff = (m: unknown) => {
+    const k = kickoffUnix(m)
+    if (!k) return null
+    const nowSec = Math.floor(Date.now() / 1000)
+    return Math.floor((k - nowSec) / 60)
+  }
+
+  const formatKickoffTime = (m: unknown) => {
+    const k = kickoffUnix(m)
+    if (!k) return ""
+    try {
+      return new Intl.DateTimeFormat("it-IT", {
+        hour: "2-digit",
+        minute: "2-digit"
+      }).format(new Date(k * 1000))
+    } catch {
+      return ""
+    }
+  }
+
+  const dayBadge = (m: unknown) => {
+    const k = kickoffUnix(m)
+    if (!k) return null
+    try {
+      const d = new Date(k * 1000)
+      const now = new Date()
+
+      const a = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+      const b = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      const diffDays = Math.round((b - a) / (1000 * 60 * 60 * 24))
+
+      if (diffDays === 0) return "OGGI"
+      if (diffDays === 1) return "DOMANI"
+
+      const dd = String(d.getDate()).padStart(2, "0")
+      const mm = String(d.getMonth() + 1).padStart(2, "0")
+      return `${dd}/${mm}`
+    } catch {
+      return null
+    }
+  }
+
+  const soonBadge = (m: unknown) => {
+    if (isLiveMatch(m)) return null
+    const mins = minutesToKickoff(m)
+    if (mins === null) return null
+    if (mins >= 0 && mins <= 15) return "TRA POCO"
+    return null
+  }
+
+  const kickoffBadge = (m: unknown) => {
+    if (isLiveMatch(m)) return null
+    const mins = minutesToKickoff(m)
+    if (mins === null) return null
+    if (mins < 0) return null
+    if (mins < 60) return `+${mins}m`
+    const h = Math.floor(mins / 60)
+    const r = mins % 60
+    if (r === 0) return `+${h}h`
+    return `+${h}h${r}`
+  }
 
   useEffect(() => {
     openMatchExplainIdRef.current = openMatchExplainId
@@ -588,6 +805,62 @@ export function StatisticalPredictionsDashboard() {
     const minRank = confidenceRank(tenantMinConfidence)
     return toPlay.filter((m) => matchAllowedByProfile(m, profile) && confidenceRank(confidenceLabel(Number(m.confidence ?? 0))) >= minRank)
   }, [profile, tenantMinConfidence, toPlay])
+  const watchlistMatches = useMemo(() => {
+    if (!watchlist.length) return []
+    const map = new Map<string, OverviewMatch>()
+    for (const m of visibleToPlay) map.set(matchId(m), m)
+    const list = watchlist.map((w) => {
+      const liveMatch = map.get(w.id)
+      return liveMatch ? liveMatch : toFallbackMatch(w)
+    })
+    const dayScore = (m: unknown) => {
+      const k = kickoffUnix(m)
+      if (!k) return 999
+      const d = new Date(k * 1000)
+      const now = new Date()
+      const a = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+      const b = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      const diffDays = Math.round((b - a) / (1000 * 60 * 60 * 24))
+      if (diffDays < 0) return 998
+      return diffDays
+    }
+
+    list.sort((a, b) => {
+      const ap = isPinned(a) ? 1 : 0
+      const bp = isPinned(b) ? 1 : 0
+      if (ap !== bp) return bp - ap
+
+      const al = isLiveMatch(a) ? 1 : 0
+      const bl = isLiveMatch(b) ? 1 : 0
+      if (al !== bl) return bl - al
+
+      const ad = dayScore(a)
+      const bd = dayScore(b)
+      if (ad !== bd) return ad - bd
+
+      const ak = Number(kickoffUnix(a) ?? 0)
+      const bk = Number(kickoffUnix(b) ?? 0)
+      return ak - bk
+    })
+    return list
+  }, [isLiveMatch, isPinned, matchId, toFallbackMatch, watchlist, visibleToPlay])
+
+  const clearHistorical = () => {
+    const historicalIds = new Set(watchlistMatches.filter(isHistorical).map((m) => matchId(m)))
+    if (historicalIds.size === 0) return
+
+    const ok = window.confirm(`Vuoi rimuovere ${historicalIds.size} preferiti non più in calendario?`)
+    if (!ok) return
+
+    setWatchlist(watchlist.filter((w) => !historicalIds.has(w.id)))
+    showUINotice(historicalIds.size === 1 ? "Pulito 1 storico ✅" : `Puliti ${historicalIds.size} storici ✅`)
+  }
+
+  const filteredWatchlistMatches = useMemo(() => {
+    const q = String(watchSearch ?? "").trim().toLowerCase()
+    if (!q) return watchlistMatches
+    return watchlistMatches.filter((m) => `${m.home_team ?? ""} ${m.away_team ?? ""}`.toLowerCase().includes(q))
+  }, [watchSearch, watchlistMatches])
   const filteredToPlay = useMemo(() => {
     const q = String(matchQuery ?? "").trim().toLowerCase()
     if (!q) return visibleToPlay
@@ -987,6 +1260,365 @@ export function StatisticalPredictionsDashboard() {
         </Card>
 
         <div className="lg:col-span-6 space-y-4">
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Preferiti ⭐</div>
+                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                  Salva qui le partite che vuoi seguire più spesso.
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+                  {watchlist.length}/20 · PIN {pinnedCount}/3
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWatchModalOpen(true)}
+                  className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                >
+                  Apri Preferiti
+                </button>
+                {watchlistMatches.some(isHistorical) ? (
+                  <button
+                    type="button"
+                    onClick={clearHistorical}
+                    className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                    title="Rimuovi solo i preferiti non più in calendario"
+                  >
+                    Pulisci storici
+                  </button>
+                ) : null}
+                {watchlist.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setWatchlist([])}
+                    className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                    title="Svuota preferiti"
+                  >
+                    Svuota
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <label className="w-full md:max-w-sm">
+                <span className="sr-only">Cerca nei preferiti</span>
+                <input
+                  value={watchSearch}
+                  onChange={(e) => setWatchSearch(e.target.value)}
+                  placeholder="Cerca nei preferiti (es. Inter, Milan...)"
+                  className="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 shadow-sm backdrop-blur-md placeholder:text-zinc-500 dark:bg-zinc-950/35 dark:text-zinc-50"
+                />
+              </label>
+
+              {watchlist.length > 6 ? (
+                <button
+                  type="button"
+                  onClick={() => setWatchShowAll((v) => !v)}
+                  className="rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                >
+                  {watchShowAll ? "Mostra meno" : "Mostra tutti"}
+                </button>
+              ) : null}
+            </div>
+
+            {uiNotice ? (
+              <div className="mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                {uiNotice}
+              </div>
+            ) : null}
+
+            <div className="mt-3">
+              {filteredWatchlistMatches.length ? (
+                <>
+                  <div className="grid grid-cols-1 gap-2 md:hidden">
+                    {(watchShowAll ? filteredWatchlistMatches : filteredWatchlistMatches.slice(0, 3)).map((m) => {
+                      const leagueLabel = m.league ?? m.competition ?? m.championship ?? "Match"
+                      const timeLabel = formatKickoffTime(m)
+                      return (
+                        <div
+                          key={`wl-${m.match_id}`}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
+                            </div>
+                            <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                              {`${leagueLabel}${timeLabel ? ` · ${timeLabel}` : ""}`}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              {m._from_watchlist_only ? (
+                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
+                                  NON IN CALENDARIO
+                                </span>
+                              ) : null}
+                              {badgeList(m).map((b) => (
+                                <span
+                                  key={b.label}
+                                  className={[
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
+                                    b.kind === "live"
+                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                                      : b.kind === "top"
+                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                  ].join(" ")}
+                                >
+                                  {b.label}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="ml-3 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => togglePin(m)}
+                              className={[
+                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                                isPinned(m)
+                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              ].join(" ")}
+                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
+                              aria-pressed={isPinned(m)}
+                            >
+                              📌
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleWatch(m)}
+                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              aria-label="Rimuovi dai preferiti"
+                              title="Rimuovi dai preferiti"
+                            >
+                              ★
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="hidden md:grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {(watchShowAll ? filteredWatchlistMatches : filteredWatchlistMatches.slice(0, 6)).map((m) => {
+                      const leagueLabel = m.league ?? m.competition ?? m.championship ?? "Match"
+                      const timeLabel = formatKickoffTime(m)
+                      return (
+                        <div
+                          key={`wl-${m.match_id}`}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
+                            </div>
+                            <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                              {`${leagueLabel}${timeLabel ? ` · ${timeLabel}` : ""}`}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              {m._from_watchlist_only ? (
+                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
+                                  NON IN CALENDARIO
+                                </span>
+                              ) : null}
+                              {badgeList(m).map((b) => (
+                                <span
+                                  key={b.label}
+                                  className={[
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
+                                    b.kind === "live"
+                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                                      : b.kind === "top"
+                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                  ].join(" ")}
+                                >
+                                  {b.label}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="ml-3 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => togglePin(m)}
+                              className={[
+                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                                isPinned(m)
+                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              ].join(" ")}
+                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
+                              aria-pressed={isPinned(m)}
+                            >
+                              📌
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleWatch(m)}
+                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              aria-label="Rimuovi dai preferiti"
+                              title="Rimuovi dai preferiti"
+                            >
+                              ★
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : watchlist.length ? (
+                <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                  {watchSearch
+                    ? "Nessun preferito corrisponde alla ricerca."
+                    : "Nessun preferito disponibile."}
+                </div>
+              ) : (
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">
+                  Nessun preferito: aggiungi una ⭐ dalle partite qui sotto.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {watchModalOpen ? (
+            <div className="fixed inset-0 z-[60] md:hidden">
+              <div className="absolute inset-0 bg-black/40" onClick={() => setWatchModalOpen(false)} aria-hidden="true" />
+              <div className="absolute inset-x-0 bottom-0 max-h-[85vh] rounded-t-3xl border border-white/10 bg-white/90 p-4 shadow-2xl backdrop-blur-md dark:bg-zinc-950/90">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold tracking-tight">Preferiti ⭐</div>
+                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Ricerca e gestisci tutti i preferiti</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWatchModalOpen(false)}
+                    className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                  >
+                    Chiudi
+                  </button>
+                </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    value={watchSearch}
+                    onChange={(e) => setWatchSearch(e.target.value)}
+                    placeholder="Cerca nei preferiti…"
+                    className="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 shadow-sm backdrop-blur-md placeholder:text-zinc-500 dark:bg-zinc-950/35 dark:text-zinc-50"
+                  />
+                  <div className="shrink-0 flex items-center gap-2">
+                    {watchlistMatches.some(isHistorical) ? (
+                      <button
+                        type="button"
+                        onClick={clearHistorical}
+                        className="shrink-0 rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                        title="Rimuovi solo i preferiti non più in calendario"
+                      >
+                        Pulisci storici
+                      </button>
+                    ) : null}
+                    {watchlist.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setWatchlist([])}
+                        className="rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                        title="Svuota preferiti"
+                      >
+                        Svuota
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {uiNotice ? (
+                  <div className="mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    {uiNotice}
+                  </div>
+                ) : null}
+
+                <div className="mt-3 overflow-auto pb-6">
+                  {filteredWatchlistMatches.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2">
+                      {filteredWatchlistMatches.map((m) => (
+                        <div
+                          key={matchId(m)}
+                          className="flex items-center justify-between rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                              {m.home_team} – {m.away_team}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              {m._from_watchlist_only ? (
+                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
+                                  NON IN CALENDARIO
+                                </span>
+                              ) : null}
+                              {badgeList(m).map((b) => (
+                                <span
+                                  key={b.label}
+                                  className={[
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
+                                    b.kind === "live"
+                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                                      : b.kind === "top"
+                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                  ].join(" ")}
+                                >
+                                  {b.label}
+                                </span>
+                              ))}
+                            </div>
+                            <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                              {`${m.league ?? m.competition ?? m.championship ?? "Match"}${formatKickoffTime(m) ? ` · ${formatKickoffTime(m)}` : ""}`}
+                            </div>
+                          </div>
+                          <div className="ml-3 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => togglePin(m)}
+                              className={[
+                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                                isPinned(m)
+                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              ].join(" ")}
+                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
+                              aria-pressed={isPinned(m)}
+                            >
+                              📌
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleWatch(m)}
+                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              aria-label="Rimuovi dai preferiti"
+                              title="Rimuovi dai preferiti"
+                            >
+                              ★
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                      {watchSearch ? "Nessun preferito corrisponde alla ricerca." : "Nessun preferito. Tocca ☆ su una partita per aggiungerla."}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <Card className="!bg-white/10 dark:!bg-zinc-950/25">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1030,6 +1662,7 @@ export function StatisticalPredictionsDashboard() {
                   const p2 = safeProb(m, "away_win")
                   const kickoffLabel = formatKickoff(m.kickoff_unix)
                   const open = openMatchExplainId === m.match_id
+                  const watched = isWatched(m)
                   const conf = confidenceLabel(Number(m.confidence ?? 0))
                   const risk = matchRisk(m)
                   const pct = educationalOnly ? 0 : stakePctForProfile(profile, conf, risk)
@@ -1056,8 +1689,24 @@ export function StatisticalPredictionsDashboard() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                            {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleWatch(m)}
+                              className={[
+                                "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-sm transition",
+                                watched
+                                  ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                              ].join(" ")}
+                              aria-pressed={watched}
+                              title={watched ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
+                            >
+                              {watched ? "★" : "☆"}
+                            </button>
                           </div>
                           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
                             {kickoffLabel ? <span>{kickoffLabel} · </span> : null}
