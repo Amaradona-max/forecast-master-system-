@@ -255,12 +255,6 @@ function bestProb(m: OverviewMatch) {
   return Math.max(safeProb(m, "home_win"), safeProb(m, "draw"), safeProb(m, "away_win"))
 }
 
-function sortKickoff(a: OverviewMatch, b: OverviewMatch) {
-  const ka = Number(a.kickoff_unix ?? 0)
-  const kb = Number(b.kickoff_unix ?? 0)
-  return ka - kb
-}
-
 function formatKickoff(kickoffUnix?: number | null) {
   const v = Number(kickoffUnix)
   if (!Number.isFinite(v) || v <= 0) return null
@@ -368,6 +362,9 @@ export function StatisticalPredictionsDashboard() {
   const [profile, setProfile] = useState<ProfileKey>("BALANCED")
   const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null)
   const [profileLoaded, setProfileLoaded] = useState<boolean>(false)
+  const [mobileControlsOpen, setMobileControlsOpen] = useState<boolean>(false)
+  const [matchQuery, setMatchQuery] = useState<string>("")
+  const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
 
   const [openTeamExplain, setOpenTeamExplain] = useState<string>("")
   const [teamExplain, setTeamExplain] = useState<ExplainResponse | null>(null)
@@ -591,13 +588,21 @@ export function StatisticalPredictionsDashboard() {
     const minRank = confidenceRank(tenantMinConfidence)
     return toPlay.filter((m) => matchAllowedByProfile(m, profile) && confidenceRank(confidenceLabel(Number(m.confidence ?? 0))) >= minRank)
   }, [profile, tenantMinConfidence, toPlay])
+  const filteredToPlay = useMemo(() => {
+    const q = String(matchQuery ?? "").trim().toLowerCase()
+    if (!q) return visibleToPlay
+    return visibleToPlay.filter((m) => `${m.home_team} ${m.away_team}`.toLowerCase().includes(q))
+  }, [matchQuery, visibleToPlay])
 
   const nextMatches = useMemo(() => {
-    return visibleToPlay
-      .slice()
-      .sort((a, b) => bestProb(b) - bestProb(a))
-      .slice(0, 4)
-  }, [visibleToPlay])
+    const list = filteredToPlay.slice()
+    list.sort((a, b) => {
+      if (sortMode === "kickoff") return Number(a.kickoff_unix ?? 0) - Number(b.kickoff_unix ?? 0)
+      if (sortMode === "confidence") return Number(b.confidence ?? 0) - Number(a.confidence ?? 0)
+      return bestProb(b) - bestProb(a)
+    })
+    return list.slice(0, 8)
+  }, [filteredToPlay, sortMode])
 
   const stats = useMemo(() => derivedStats(visibleToPlay), [visibleToPlay])
   const trend = useMemo(() => probabilityTrend(matchdays), [matchdays])
@@ -781,6 +786,37 @@ export function StatisticalPredictionsDashboard() {
               Educational only
             </div>
           ) : null}
+          <button
+            type="button"
+            onClick={() => setMobileControlsOpen((v) => !v)}
+            className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:bg-zinc-950/20 dark:text-zinc-200"
+            aria-expanded={mobileControlsOpen}
+          >
+            Impostazioni
+          </button>
+
+          <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+            <label className="sr-only" htmlFor="match-search">
+              Cerca match
+            </label>
+            <input
+              id="match-search"
+              value={matchQuery}
+              onChange={(e) => setMatchQuery(e.target.value)}
+              placeholder="Cerca team…"
+              className="w-40 bg-transparent text-xs text-zinc-900 placeholder:text-zinc-500 outline-none dark:text-zinc-50 dark:placeholder:text-zinc-400"
+            />
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as "kickoff" | "prob" | "confidence")}
+              className="rounded-lg border border-white/10 bg-white/10 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200"
+              aria-label="Ordina"
+            >
+              <option value="prob">Top prob.</option>
+              <option value="confidence">Confidence</option>
+              <option value="kickoff">Kickoff</option>
+            </select>
+          </div>
           <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
             <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
             {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
@@ -847,6 +883,53 @@ export function StatisticalPredictionsDashboard() {
         </div>
       </div>
 
+      {mobileControlsOpen ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-md dark:bg-zinc-950/25 md:hidden">
+          <div className="grid grid-cols-1 gap-2">
+            <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
+            <div className="flex flex-wrap gap-2">
+              {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
+                const active = profile === p
+                const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setProfile(p)}
+                    className={[
+                      "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                      active
+                        ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                    ].join(" ")}
+                    aria-pressed={active}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Bankroll</div>
+              <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{bankroll}u</div>
+            </div>
+            <input
+              type="range"
+              min={50}
+              max={1000}
+              step={10}
+              value={bankroll}
+              onChange={(e) => setBankroll(Number(e.target.value))}
+              className="w-full accent-emerald-500"
+              aria-label="Bankroll"
+            />
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Card className="lg:col-span-3 !bg-white/10 !p-4 dark:!bg-zinc-950/25">
           <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">League Overview</div>
@@ -908,16 +991,40 @@ export function StatisticalPredictionsDashboard() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Next Match Predictions</div>
-                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Top 4 per probabilità massima</div>
+                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Filtra per squadra e ordina al volo</div>
               </div>
               <div className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-                Gare: {matchesCount} · Media: {fmtPct(avgBest)}
+                Gare: {filteredToPlay.length}/{matchesCount} · Media: {fmtPct(avgBest)}
               </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <label className="md:col-span-2">
+                <span className="sr-only">Cerca squadra</span>
+                <input
+                  value={matchQuery}
+                  onChange={(e) => setMatchQuery(e.target.value)}
+                  placeholder="Cerca squadra (es. Inter, Milan, Juventus…)"
+                  className="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 shadow-sm backdrop-blur-md placeholder:text-zinc-500 dark:bg-zinc-950/35 dark:text-zinc-50"
+                />
+              </label>
+              <label>
+                <span className="sr-only">Ordina</span>
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as "kickoff" | "prob" | "confidence")}
+                  className="w-full rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 shadow-sm backdrop-blur-md dark:bg-zinc-950/35 dark:text-zinc-50"
+                >
+                  <option value="prob">Ordina: Probabilità</option>
+                  <option value="confidence">Ordina: Confidence</option>
+                  <option value="kickoff">Ordina: Orario</option>
+                </select>
+              </label>
             </div>
 
             <div className="mt-4 space-y-3">
               {nextMatches.length ? (
-                nextMatches.slice().sort(sortKickoff).map((m) => {
+                nextMatches.map((m) => {
                   const p1 = safeProb(m, "home_win")
                   const px = safeProb(m, "draw")
                   const p2 = safeProb(m, "away_win")
