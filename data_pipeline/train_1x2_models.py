@@ -103,6 +103,125 @@ def _fit_platt_ovr(*, y_true: np.ndarray, proba: np.ndarray, labels: list[str]) 
     return {"method": "platt_ovr", "params": params, "labels": list(labels)}
 
 
+def _fit_dirichlet_multiclass(*, y_true: np.ndarray, proba: np.ndarray, labels: list[str]) -> dict[str, Any]:
+    # Dirichlet calibration (multiclasse): softmax(W * log(p) + b)
+    # Riferimento concettuale: migliora probabilità tra classi rispetto a OVR.
+    proba2 = np.clip(proba.astype(float), 1e-6, 1.0)
+    X = np.log(proba2)
+    clf = LogisticRegression(max_iter=2000, multi_class="multinomial")
+    clf.fit(X, y_true)
+    coef0 = clf.coef_.astype(float)
+    intercept0 = clf.intercept_.astype(float)
+
+    classes = [str(c) for c in list(getattr(clf, "classes_", []) or [])]
+    try:
+        row_idx = [classes.index(str(lab)) for lab in labels]
+        coef0 = coef0[row_idx, :]
+        intercept0 = intercept0[row_idx]
+    except Exception:
+        pass
+
+    coef = coef0.tolist()  # shape: [K, K]
+    intercept = intercept0.tolist()  # shape: [K]
+    return {"method": "dirichlet", "coef": coef, "intercept": intercept, "labels": list(labels)}
+
+
+def _reorder_proba_to_labels(*, proba: np.ndarray, classes: Any, labels: list[str]) -> np.ndarray:
+    if proba.ndim != 2:
+        return proba
+    if not isinstance(labels, list) or not labels:
+        return proba
+    if not isinstance(classes, (list, tuple, np.ndarray)):
+        return proba
+    cls = [str(c) for c in list(classes)]
+    if len(cls) != proba.shape[1]:
+        return proba
+    try:
+        idx = [cls.index(str(lab)) for lab in labels]
+    except Exception:
+        return proba
+    return proba[:, idx]
+
+
+def _apply_platt_ovr(*, params: dict[str, Any], proba: np.ndarray, labels: list[str]) -> np.ndarray:
+    out = np.asarray(proba, dtype=float).copy()
+    for i, lab in enumerate(labels):
+        if i >= out.shape[1]:
+            continue
+        row = params.get(str(lab))
+        if not isinstance(row, dict):
+            continue
+        coef = row.get("coef")
+        intercept = row.get("intercept")
+        if not isinstance(coef, (int, float)) or not isinstance(intercept, (int, float)):
+            continue
+        p = np.clip(out[:, i], 1e-6, 1.0 - 1e-6)
+        z = float(coef) * np.log(p / (1.0 - p)) + float(intercept)
+        z = np.clip(z, -60.0, 60.0)
+        out[:, i] = 1.0 / (1.0 + np.exp(-z))
+    s = np.sum(np.maximum(out, 0.0), axis=1, keepdims=True)
+    s[s <= 0] = 1.0
+    out = np.maximum(out, 0.0) / s
+    return out
+
+
+def _fit_dirichlet(*, y_true: np.ndarray, proba: np.ndarray, labels: list[str]) -> dict[str, Any] | None:
+    try:
+        return _fit_dirichlet_multiclass(y_true=y_true, proba=proba, labels=labels)
+    except Exception:
+        return None
+
+
+def _apply_dirichlet(*, calib: dict[str, Any], proba: np.ndarray, labels: list[str]) -> np.ndarray:
+    params0 = calib.get("params")
+    params = params0 if isinstance(params0, dict) else calib
+    coef0 = params.get("coef")
+    intercept0 = params.get("intercept")
+    if not isinstance(coef0, list) or not isinstance(intercept0, list):
+        return np.asarray(proba, dtype=float)
+    try:
+        coef = np.asarray(coef0, dtype=float)
+        intercept = np.asarray(intercept0, dtype=float)
+    except Exception:
+        return np.asarray(proba, dtype=float)
+    if coef.shape != (len(labels), len(labels)):
+        return np.asarray(proba, dtype=float)
+    if intercept.shape != (len(labels),):
+        return np.asarray(proba, dtype=float)
+    eps = params.get("eps")
+    eps2 = float(eps) if isinstance(eps, (int, float)) and float(eps) > 0 else 1e-6
+    p = np.clip(np.asarray(proba, dtype=float), eps2, 1.0)
+    x = np.log(p)
+    z = x @ coef.T + intercept.reshape(1, -1)
+    zmax = np.max(z, axis=1, keepdims=True)
+    expz = np.exp(z - zmax)
+    s = np.sum(expz, axis=1, keepdims=True)
+    s[s <= 0] = 1.0
+    return expz / s
+
+
+def _choose_best_calibrator(*, y_true: np.ndarray, proba: np.ndarray, labels: list[str]) -> dict[str, Any]:
+    platt = _fit_platt_ovr(y_true=y_true, proba=proba, labels=labels)
+    best = platt
+    best_ll = float("inf")
+    try:
+        platt_proba = _apply_platt_ovr(params=platt.get("params") or {}, proba=proba, labels=labels)
+        best_ll = float(log_loss(y_true, platt_proba, labels=labels))
+    except Exception:
+        best_ll = float("inf")
+
+    dirichlet = _fit_dirichlet(y_true=y_true, proba=proba, labels=labels)
+    if dirichlet is not None:
+        try:
+            dir_proba = _apply_dirichlet(calib=dirichlet, proba=proba, labels=labels)
+            ll2 = float(log_loss(y_true, dir_proba, labels=labels))
+            if math.isfinite(ll2) and ll2 < best_ll:
+                best = dirichlet
+        except Exception:
+            pass
+    return best
+
+
 def _points_for_result(ftr: str) -> tuple[int, int]:
     if ftr == "H":
         return 3, 0
@@ -283,7 +402,10 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
     )
     pipe.fit(X_train, y_train)
 
-    proba = pipe.predict_proba(X_test)
+    proba0 = pipe.predict_proba(X_test)
+    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+    classes = getattr(clf, "classes_", None)
+    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -304,7 +426,7 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
         model_path,
     )
 
-    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    calibrator = _choose_best_calibrator(y_true=y_test, proba=proba, labels=LABELS_1X2)
     joblib.dump(
         {
             "championship": league.championship,
@@ -478,7 +600,10 @@ def train_one_league_local_calendar(
     )
     pipe.fit(X_train, y_train)
 
-    proba = pipe.predict_proba(X_test)
+    proba0 = pipe.predict_proba(X_test)
+    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+    classes = getattr(clf, "classes_", None)
+    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -486,6 +611,7 @@ def train_one_league_local_calendar(
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / f"model_1x2_{league.championship}.joblib"
     metrics_path = out_dir / f"metrics_1x2_{league.championship}.json"
+    calibrator_path = out_dir / f"calibrator_1x2_{league.championship}.joblib"
 
     joblib.dump(
         {
@@ -497,7 +623,7 @@ def train_one_league_local_calendar(
         model_path,
     )
 
-    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    calibrator = _choose_best_calibrator(y_true=y_test, proba=proba, labels=LABELS_1X2)
     joblib.dump(
         {
             "championship": league.championship,
@@ -582,7 +708,10 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
     )
     pipe.fit(X_train, y_train)
 
-    proba = pipe.predict_proba(X_test)
+    proba0 = pipe.predict_proba(X_test)
+    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+    classes = getattr(clf, "classes_", None)
+    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -602,7 +731,7 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
         model_path,
     )
 
-    calibrator = _fit_platt_ovr(y_true=y_test, proba=proba, labels=LABELS_1X2)
+    calibrator = _choose_best_calibrator(y_true=y_test, proba=proba, labels=LABELS_1X2)
     joblib.dump(
         {
             "championship": championship,

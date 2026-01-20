@@ -1,18 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
-import {
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts"
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import dynamic from "next/dynamic"
 
 import type { ExplainResponse, MultiMarketConfidenceResponse, TeamToPlay, TeamsToPlayResponse, TenantConfig, TrackRecordResponse, UserProfile } from "@/components/api/types"
 import {
-  apiUrl,
+  apiFetchTenant,
   fetchTenantConfig,
   fetchSystemStatus,
   fetchExplainMatch,
@@ -23,11 +16,23 @@ import {
   fetchTrackRecord,
   fetchUserProfile,
   getApiBaseUrl,
-  getTenantId,
   updateUserProfile
 } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
+import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
+import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
+import { Modal } from "@/components/ui/Modal"
+import { VirtualList } from "@/components/ui/VirtualList"
 import { useLocalStorage } from "@/lib/useLocalStorage"
+
+const WinProbabilityChart = dynamic(
+  () => import("./charts/WinProbabilityChart").then((m) => m.WinProbabilityChart),
+  { ssr: false, loading: () => <div className="mt-4 h-52 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20" /> }
+)
+const TrackRecordChart = dynamic(
+  () => import("./charts/TrackRecordChart").then((m) => m.TrackRecordChart),
+  { ssr: false, loading: () => <div className="mt-4 h-56 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20" /> }
+)
 
 type OverviewMatch = {
   match_id: string
@@ -379,17 +384,24 @@ export function StatisticalPredictionsDashboard() {
   const [mobileControlsOpen, setMobileControlsOpen] = useState<boolean>(false)
   const [matchQuery, setMatchQuery] = useState<string>("")
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
+  const [onlyGood, setOnlyGood] = useState<boolean>(false)
+  const [hideNoBet, setHideNoBet] = useState<boolean>(true)
+  const [detailOpen, setDetailOpen] = useState<boolean>(false)
+  const [detailMatch, setDetailMatch] = useState<(OverviewMatch & { p1: number; px: number; p2: number }) | null>(null)
   const [watchSearch, setWatchSearch] = useState<string>("")
   const [watchShowAll, setWatchShowAll] = useState<boolean>(false)
   const [watchModalOpen, setWatchModalOpen] = useState<boolean>(false)
   const [uiNotice, setUiNotice] = useState<string>("")
+  const [pageVisible, setPageVisible] = useState(true)
+  const deferredMatchQuery = useDeferredValue(matchQuery)
+  const deferredWatchSearch = useDeferredValue(watchSearch)
 
-  const showUINotice = (msg: string) => {
+  const showUINotice = useCallback((msg: string) => {
     setUiNotice(msg)
     window.setTimeout(() => {
       setUiNotice("")
     }, 2500)
-  }
+  }, [])
 
   const [openTeamExplain, setOpenTeamExplain] = useState<string>("")
   const [teamExplain, setTeamExplain] = useState<ExplainResponse | null>(null)
@@ -397,6 +409,7 @@ export function StatisticalPredictionsDashboard() {
   const [teamExplainLoading, setTeamExplainLoading] = useState<boolean>(false)
 
   const [openMatchExplainId, setOpenMatchExplainId] = useState<string>("")
+  const [expandedMatchId, setExpandedMatchId] = useState<string>("")
   const [matchExplain, setMatchExplain] = useState<ExplainResponse | null>(null)
   const [matchExplainError, setMatchExplainError] = useState<string | null>(null)
   const [matchExplainLoading, setMatchExplainLoading] = useState<boolean>(false)
@@ -416,15 +429,15 @@ export function StatisticalPredictionsDashboard() {
     championship?: unknown
   }
 
-  const matchId = (m: WatchMatchLike) => {
+  const matchId = useCallback((m: WatchMatchLike) => {
     const home = String(m?.home_team ?? "")
     const away = String(m?.away_team ?? "")
     const ko = m?.kickoff_unix ?? m?.kickoff ?? ""
     if (!home && !away && !ko) return ""
     return `${home}__${away}__${ko}`
-  }
+  }, [])
 
-  const toFallbackMatch = (w: WatchItem): OverviewMatch & { _from_watchlist_only: true } => {
+  const toFallbackMatch = useCallback((w: WatchItem): OverviewMatch & { _from_watchlist_only: true } => {
     return {
       match_id: w.id,
       championship: "",
@@ -441,56 +454,65 @@ export function StatisticalPredictionsDashboard() {
       final_score: null,
       _from_watchlist_only: true
     }
-  }
+  }, [])
 
   const isHistorical = (m: unknown) => {
     const obj = m as { _from_watchlist_only?: unknown } | null | undefined
     return Boolean(obj?._from_watchlist_only)
   }
 
-  const isWatched = (m: WatchMatchLike) => watchlist.some((w) => w.id === matchId(m))
+  const isWatched = useCallback((m: WatchMatchLike) => watchlist.some((w) => w.id === matchId(m)), [matchId, watchlist])
 
-  const toggleWatch = (m: WatchMatchLike) => {
-    const id = matchId(m)
-    if (!id) return
+  const toggleWatch = useCallback(
+    (m: WatchMatchLike) => {
+      const id = matchId(m)
+      if (!id) return
 
-    if (watchlist.some((w) => w.id === id)) {
-      setWatchlist(watchlist.filter((w) => w.id !== id))
-      return
-    }
-
-    const item: WatchItem = {
-      id,
-      home: String(m.home_team ?? ""),
-      away: String(m.away_team ?? ""),
-      kickoff_unix: Number(m.kickoff_unix ?? NaN),
-      league: String(m.league ?? m.competition ?? m.championship ?? ""),
-      pinned: false
-    }
-    setWatchlist([item, ...watchlist].slice(0, 20))
-  }
+      setWatchlist((prev) => {
+        if (prev.some((w) => w.id === id)) return prev.filter((w) => w.id !== id)
+        const item: WatchItem = {
+          id,
+          home: String(m.home_team ?? ""),
+          away: String(m.away_team ?? ""),
+          kickoff_unix: Number(m.kickoff_unix ?? NaN),
+          league: String(m.league ?? m.competition ?? m.championship ?? ""),
+          pinned: false
+        }
+        return [item, ...prev].slice(0, 20)
+      })
+    },
+    [matchId, setWatchlist]
+  )
 
   const pinnedCount = watchlist.filter((w) => w.pinned).length
 
-  const isPinned = (m: WatchMatchLike) => {
+  const isPinned = useCallback((m: WatchMatchLike) => {
     const id = matchId(m)
     return watchlist.some((w) => w.id === id && w.pinned)
-  }
+  }, [matchId, watchlist])
 
-  const togglePin = (m: WatchMatchLike) => {
-    const id = matchId(m)
-    if (!id) return
+  const togglePin = useCallback(
+    (m: WatchMatchLike) => {
+      const id = matchId(m)
+      if (!id) return
 
-    const currentlyPinned = isPinned(m)
-    if (!currentlyPinned && pinnedCount >= 3) {
-      showUINotice("Hai già 3 PIN attivi. Rimuovine uno per aggiungerne un altro.")
-      return
-    }
+      setWatchlist((prev) => {
+        const currentlyPinned = prev.some((w) => w.id === id && w.pinned)
+        const pinnedCountNow = prev.filter((w) => w.pinned).length
+        if (!currentlyPinned && pinnedCountNow >= 3) {
+          showUINotice("Hai già 3 PIN attivi. Rimuovine uno per aggiungerne un altro.")
+          return prev
+        }
+        return prev.map((w) => (w.id === id ? { ...w, pinned: !currentlyPinned } : w))
+      })
+    },
+    [matchId, setWatchlist, showUINotice]
+  )
 
-    setWatchlist(watchlist.map((w) => (w.id === id ? { ...w, pinned: !currentlyPinned } : w)))
-  }
+  const onToggleWatch = useCallback((m: WatchMatchLike) => toggleWatch(m), [toggleWatch])
+  const onTogglePin = useCallback((m: WatchMatchLike) => togglePin(m), [togglePin])
 
-  const isLiveMatch = (m: unknown) => {
+  const isLiveMatch = useCallback((m: unknown) => {
     const obj = m as Record<string, unknown> | null | undefined
     if (obj?.is_live === true) return true
     const s = String(obj?.status ?? obj?.match_status ?? "").toLowerCase()
@@ -498,12 +520,104 @@ export function StatisticalPredictionsDashboard() {
     const minute = Number(obj?.minute ?? obj?.match_minute ?? 0)
     if (Number.isFinite(minute) && minute > 0) return true
     return false
-  }
+  }, [])
 
-  const confValue = (m: unknown) => {
+  const confValue = useCallback((m: unknown) => {
     const obj = m as Record<string, unknown> | null | undefined
     const c = obj?.confidence ?? obj?.model_confidence ?? obj?.prediction_confidence
     return typeof c === "number" ? clamp01(c) : 0
+  }, [])
+
+  const qualityScore = useCallback((m: unknown) => {
+    const p = clamp01(bestProb(m as OverviewMatch))
+    const c = clamp01(confValue(m))
+    const score = 0.65 * p + 0.35 * c
+    if (score >= 0.8) return { grade: "A" as const, score }
+    if (score >= 0.7) return { grade: "B" as const, score }
+    if (score >= 0.6) return { grade: "C" as const, score }
+    return { grade: "D" as const, score }
+  }, [confValue])
+
+  const riskLabel = (m: unknown) => {
+    const p = clamp01(bestProb(m as OverviewMatch))
+    const c = clamp01(confValue(m))
+    if (p >= 0.7 && c >= 0.7) return { label: "Basso", tone: "green" as const }
+    if (p >= 0.6 && c >= 0.6) return { label: "Medio", tone: "yellow" as const }
+    return { label: "Alto", tone: "red" as const }
+  }
+
+  const noBetReason = (m: unknown) => {
+    const p = clamp01(bestProb(m as OverviewMatch))
+    const c = clamp01(confValue(m))
+    if (p < 0.55) return "Probabilità troppo bassa"
+    if (c < 0.55) return "Affidabilità (confidence) bassa"
+    return "Segnali non abbastanza forti"
+  }
+
+  const isNoBet = useCallback((m: unknown) => {
+    const q = qualityScore(m)
+    const p = clamp01(bestProb(m as OverviewMatch))
+    const c = clamp01(confValue(m))
+    return q.grade === "D" || p < 0.5 || c < 0.5
+  }, [confValue, qualityScore])
+
+  const pillClass = (tone: "green" | "yellow" | "red" | "zinc" | "blue") => {
+    if (tone === "green") return "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+    if (tone === "yellow") return "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+    if (tone === "red") return "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+    if (tone === "blue") return "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+    return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+  }
+
+  type Pick = { key: string; label: string; prob: number }
+
+  const picksFromMatch = (m: unknown): Pick[] => {
+    const obj = m as Record<string, unknown> | null | undefined
+
+    const rawPicks = obj?.picks
+    if (Array.isArray(rawPicks)) {
+      return (rawPicks as unknown[])
+        .map((p) => {
+          const pp = p as Record<string, unknown> | null | undefined
+          return {
+            key: String(pp?.key ?? pp?.market ?? ""),
+            label: String(pp?.label ?? pp?.name ?? pp?.key ?? ""),
+            prob: Number(pp?.prob ?? pp?.probability ?? 0)
+          }
+        })
+        .filter((p) => p.key && Number.isFinite(p.prob))
+    }
+
+    const p1 = Number(obj?.p1 ?? obj?.home_win_prob ?? obj?.prob_home ?? 0)
+    const px = Number(obj?.px ?? obj?.draw_prob ?? obj?.prob_draw ?? 0)
+    const p2 = Number(obj?.p2 ?? obj?.away_win_prob ?? obj?.prob_away ?? 0)
+    const arr: Pick[] = []
+    if (Number.isFinite(p1) && p1 > 0) arr.push({ key: "1", label: "1 (Casa)", prob: p1 })
+    if (Number.isFinite(px) && px > 0) arr.push({ key: "X", label: "X (Pareggio)", prob: px })
+    if (Number.isFinite(p2) && p2 > 0) arr.push({ key: "2", label: "2 (Trasferta)", prob: p2 })
+    return arr
+  }
+
+  const topTwoPicks = (m: unknown) => {
+    const ps = picksFromMatch(m).slice().sort((a, b) => b.prob - a.prob)
+    const best = ps[0] ?? null
+    const alt = ps[1] ?? null
+    return { best, alt }
+  }
+
+  const adviceLine = (m: unknown) => {
+    if (isNoBet(m)) return `Consiglio: NO BET — ${noBetReason(m)}.`
+
+    const { best, alt } = topTwoPicks(m)
+    const q = qualityScore(m)
+    const r = riskLabel(m)
+
+    if (!best) return "Consiglio: n/d."
+
+    const gap = alt ? Math.max(0, best.prob - alt.prob) : best.prob
+    const gapTxt = gap >= 0.10 ? "distacco netto" : gap >= 0.05 ? "distacco discreto" : "distacco basso"
+
+    return `Consiglio: ${best.label} — Qualità ${q.grade}, Rischio ${r.label} (${gapTxt}).`
   }
 
   const badgeList = (m: unknown) => {
@@ -519,6 +633,8 @@ export function StatisticalPredictionsDashboard() {
 
     const c = confValue(m)
     if (c >= 0.75) badges.push({ label: "CONF", kind: "conf" })
+
+    if (isNoBet(m)) badges.push({ label: "NO BET", kind: "conf" })
 
     const sb = soonBadge(m)
     if (sb) badges.push({ label: sb, kind: "live" })
@@ -601,6 +717,13 @@ export function StatisticalPredictionsDashboard() {
   useEffect(() => {
     openMatchExplainIdRef.current = openMatchExplainId
   }, [openMatchExplainId])
+
+  useEffect(() => {
+    const handler = () => setPageVisible(!document.hidden)
+    handler()
+    document.addEventListener("visibilitychange", handler)
+    return () => document.removeEventListener("visibilitychange", handler)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -688,9 +811,10 @@ export function StatisticalPredictionsDashboard() {
   useEffect(() => {
     let active = true
     async function load() {
+      if (!pageVisible) return
       try {
         setError(null)
-        const res = await fetch(apiUrl("/api/v1/overview/championships"), { cache: "no-store", headers: { "x-tenant-id": getTenantId() } })
+        const res = await apiFetchTenant("/api/v1/overview/championships", { cache: "no-store" })
         if (!res.ok) {
           let detail = ""
           try {
@@ -715,7 +839,7 @@ export function StatisticalPredictionsDashboard() {
       active = false
       window.clearInterval(t)
     }
-  }, [])
+  }, [pageVisible])
 
   useEffect(() => {
     let active = true
@@ -738,6 +862,7 @@ export function StatisticalPredictionsDashboard() {
   useEffect(() => {
     let active = true
     async function loadTeamsToPlay() {
+      if (!pageVisible) return
       try {
         const res = await fetchTeamsToPlay()
         if (!active) return
@@ -754,7 +879,7 @@ export function StatisticalPredictionsDashboard() {
       active = false
       window.clearInterval(t)
     }
-  }, [])
+  }, [pageVisible])
 
   useEffect(() => {
     let active = true
@@ -857,15 +982,27 @@ export function StatisticalPredictionsDashboard() {
   }
 
   const filteredWatchlistMatches = useMemo(() => {
-    const q = String(watchSearch ?? "").trim().toLowerCase()
+    const q = String(deferredWatchSearch ?? "").trim().toLowerCase()
     if (!q) return watchlistMatches
     return watchlistMatches.filter((m) => `${m.home_team ?? ""} ${m.away_team ?? ""}`.toLowerCase().includes(q))
-  }, [watchSearch, watchlistMatches])
+  }, [deferredWatchSearch, watchlistMatches])
+
+  const passesDecisionFilters = useCallback((m: unknown) => {
+    const q = qualityScore(m)
+    if (hideNoBet && isNoBet(m)) return false
+    if (onlyGood && !(q.grade === "A" || q.grade === "B")) return false
+    return true
+  }, [hideNoBet, isNoBet, onlyGood, qualityScore])
+
+  const filteredBaseToPlay = useMemo(() => {
+    return visibleToPlay.filter(passesDecisionFilters)
+  }, [passesDecisionFilters, visibleToPlay])
+
   const filteredToPlay = useMemo(() => {
-    const q = String(matchQuery ?? "").trim().toLowerCase()
-    if (!q) return visibleToPlay
-    return visibleToPlay.filter((m) => `${m.home_team} ${m.away_team}`.toLowerCase().includes(q))
-  }, [matchQuery, visibleToPlay])
+    const q = String(deferredMatchQuery ?? "").trim().toLowerCase()
+    if (!q) return filteredBaseToPlay
+    return filteredBaseToPlay.filter((m) => `${m.home_team} ${m.away_team}`.toLowerCase().includes(q))
+  }, [deferredMatchQuery, filteredBaseToPlay])
 
   const nextMatches = useMemo(() => {
     const list = filteredToPlay.slice()
@@ -874,8 +1011,9 @@ export function StatisticalPredictionsDashboard() {
       if (sortMode === "confidence") return Number(b.confidence ?? 0) - Number(a.confidence ?? 0)
       return bestProb(b) - bestProb(a)
     })
-    return list.slice(0, 8)
-  }, [filteredToPlay, sortMode])
+    const filtered = list.filter(passesDecisionFilters)
+    return filtered.slice(0, 12)
+  }, [filteredToPlay, passesDecisionFilters, sortMode])
 
   const stats = useMemo(() => derivedStats(visibleToPlay), [visibleToPlay])
   const trend = useMemo(() => probabilityTrend(matchdays), [matchdays])
@@ -895,8 +1033,8 @@ export function StatisticalPredictionsDashboard() {
   const brandTagline = String(tenantConfig?.branding?.tagline ?? "").trim()
   const brandLogoUrl = String(tenantConfig?.branding?.logo_url ?? "").trim()
   const disabledProfiles = (tenantConfig?.features?.disabled_profiles ?? []) as ProfileKey[]
-  const matchesCount = visibleToPlay.length
-  const avgBest = matchesCount ? visibleToPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
+  const matchesCount = filteredBaseToPlay.length
+  const avgBest = matchesCount ? filteredBaseToPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
   const gaugeValue = avgBest
   const teamsToPlayItem = useMemo(() => {
     const items = teamsToPlay?.items ?? []
@@ -940,20 +1078,10 @@ export function StatisticalPredictionsDashboard() {
     }
   }
 
-  async function toggleExplainMatch(matchId: string) {
+  async function loadMatchDetails(matchId: string) {
     const key = String(matchId ?? "").trim()
     if (!key) return
-    if (openMatchExplainId === key) {
-      setOpenMatchExplainId("")
-      setMatchExplain(null)
-      setMatchExplainError(null)
-      setMatchExplainLoading(false)
-      setMultiMarket(null)
-      setMultiMarketError(null)
-      setMultiMarketLoading(false)
-      setSelectedMarketKey("")
-      return
-    }
+    openMatchExplainIdRef.current = key
     setOpenMatchExplainId(key)
     setMatchExplain(null)
     setMatchExplainError(null)
@@ -983,13 +1111,29 @@ export function StatisticalPredictionsDashboard() {
     }
   }
 
-  if (error) {
+  async function toggleExplainMatch(matchId: string) {
+    const key = String(matchId ?? "").trim()
+    if (!key) return
+    if (expandedMatchId === key) {
+      setExpandedMatchId("")
+      return
+    }
+    setExpandedMatchId(key)
+    if (openMatchExplainId !== key) void loadMatchDetails(key)
+  }
+
+  const apiErrorLabel =
+    error === "api_unreachable" || error === "api_disabled"
+      ? "API non raggiungibile (backend offline)."
+      : String(error ?? "")
+
+  if (error && !overview) {
     const apiLabel = getApiBaseUrl() || "same-origin"
     return (
       <Card>
         <div className="text-sm font-semibold tracking-tight">Dashboard</div>
         <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">API: {apiLabel}</div>
-        <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{error}</div>
+        <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">{apiErrorLabel}</div>
         {systemStatus ? (
           <div className="mt-3 rounded-2xl border border-zinc-200/70 bg-white/55 p-3 text-xs text-zinc-700 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/25 dark:text-zinc-200">
             <div className="font-semibold">Stato API</div>
@@ -1027,6 +1171,13 @@ export function StatisticalPredictionsDashboard() {
   return (
     <div className="relative rounded-[28px] border border-zinc-200/40 bg-[radial-gradient(circle_at_top,rgba(30,58,138,0.18),transparent_55%),radial-gradient(circle_at_top_right,rgba(190,18,60,0.14),transparent_55%),linear-gradient(180deg,rgba(24,24,27,0.25),rgba(24,24,27,0.05))] p-5 shadow-sm backdrop-blur-md dark:border-zinc-800/50 dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.18),transparent_55%),radial-gradient(circle_at_top_right,rgba(244,63,94,0.16),transparent_55%),linear-gradient(180deg,rgba(9,9,11,0.72),rgba(9,9,11,0.45))]">
       <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-white/10 dark:ring-white/10" />
+
+      {error ? (
+        <div className="mb-4 rounded-2xl border border-amber-200/50 bg-amber-50/60 px-4 py-3 text-xs text-amber-900 shadow-sm backdrop-blur-md dark:border-amber-900/35 dark:bg-amber-950/30 dark:text-amber-100">
+          <div className="font-semibold">Dati non aggiornati</div>
+          <div className="mt-1">{apiErrorLabel}</div>
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-md dark:bg-zinc-950/25">
         <div className="min-w-0 flex items-center gap-3">
@@ -1335,140 +1486,36 @@ export function StatisticalPredictionsDashboard() {
                 <>
                   <div className="grid grid-cols-1 gap-2 md:hidden">
                     {(watchShowAll ? filteredWatchlistMatches : filteredWatchlistMatches.slice(0, 3)).map((m) => {
-                      const leagueLabel = m.league ?? m.competition ?? m.championship ?? "Match"
-                      const timeLabel = formatKickoffTime(m)
                       return (
-                        <div
-                          key={`wl-${m.match_id}`}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">
-                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
-                            </div>
-                            <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
-                              {`${leagueLabel}${timeLabel ? ` · ${timeLabel}` : ""}`}
-                            </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              {m._from_watchlist_only ? (
-                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
-                                  NON IN CALENDARIO
-                                </span>
-                              ) : null}
-                              {badgeList(m).map((b) => (
-                                <span
-                                  key={b.label}
-                                  className={[
-                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
-                                    b.kind === "live"
-                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
-                                      : b.kind === "top"
-                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                                  ].join(" ")}
-                                >
-                                  {b.label}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="ml-3 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => togglePin(m)}
-                              className={[
-                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                                isPinned(m)
-                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              ].join(" ")}
-                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
-                              aria-pressed={isPinned(m)}
-                            >
-                              📌
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleWatch(m)}
-                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              aria-label="Rimuovi dai preferiti"
-                              title="Rimuovi dai preferiti"
-                            >
-                              ★
-                            </button>
-                          </div>
-                        </div>
+                        <WatchlistItem
+                          key={matchId(m)}
+                          m={m}
+                          matchKey={matchId(m)}
+                          badges={badgeList(m)}
+                          metaLine={`${m.league ?? m.competition ?? m.championship ?? "Match"}${formatKickoffTime(m) ? ` · ${formatKickoffTime(m)}` : ""}`}
+                          pinned={isPinned(m)}
+                          onTogglePin={() => onTogglePin(m)}
+                          onRemove={() => onToggleWatch(m)}
+                          showHistoricalBadge={Boolean(m?._from_watchlist_only)}
+                        />
                       )
                     })}
                   </div>
 
                   <div className="hidden md:grid grid-cols-1 gap-2 md:grid-cols-2">
                     {(watchShowAll ? filteredWatchlistMatches : filteredWatchlistMatches.slice(0, 6)).map((m) => {
-                      const leagueLabel = m.league ?? m.competition ?? m.championship ?? "Match"
-                      const timeLabel = formatKickoffTime(m)
                       return (
-                        <div
-                          key={`wl-${m.match_id}`}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">
-                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
-                            </div>
-                            <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
-                              {`${leagueLabel}${timeLabel ? ` · ${timeLabel}` : ""}`}
-                            </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              {m._from_watchlist_only ? (
-                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
-                                  NON IN CALENDARIO
-                                </span>
-                              ) : null}
-                              {badgeList(m).map((b) => (
-                                <span
-                                  key={b.label}
-                                  className={[
-                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
-                                    b.kind === "live"
-                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
-                                      : b.kind === "top"
-                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                                  ].join(" ")}
-                                >
-                                  {b.label}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="ml-3 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => togglePin(m)}
-                              className={[
-                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                                isPinned(m)
-                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              ].join(" ")}
-                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
-                              aria-pressed={isPinned(m)}
-                            >
-                              📌
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleWatch(m)}
-                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              aria-label="Rimuovi dai preferiti"
-                              title="Rimuovi dai preferiti"
-                            >
-                              ★
-                            </button>
-                          </div>
-                        </div>
+                        <WatchlistItem
+                          key={matchId(m)}
+                          m={m}
+                          matchKey={matchId(m)}
+                          badges={badgeList(m)}
+                          metaLine={`${m.league ?? m.competition ?? m.championship ?? "Match"}${formatKickoffTime(m) ? ` · ${formatKickoffTime(m)}` : ""}`}
+                          pinned={isPinned(m)}
+                          onTogglePin={() => onTogglePin(m)}
+                          onRemove={() => onToggleWatch(m)}
+                          showHistoricalBadge={Boolean(m?._from_watchlist_only)}
+                        />
                       )
                     })}
                   </div>
@@ -1542,73 +1589,82 @@ export function StatisticalPredictionsDashboard() {
                   </div>
                 ) : null}
 
-                <div className="mt-3 overflow-auto pb-6">
+                <div className="mt-3 pb-6">
                   {filteredWatchlistMatches.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-2">
-                      {filteredWatchlistMatches.map((m) => (
-                        <div
-                          key={matchId(m)}
-                          className="flex items-center justify-between rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                              {m.home_team} – {m.away_team}
+                    <VirtualList
+                      items={filteredWatchlistMatches}
+                      height={420}
+                      itemSize={92}
+                      renderRow={(m) => (
+                        <div className="px-0 py-1">
+                          <div
+                            key={matchId(m)}
+                            className="flex items-center justify-between rounded-xl border border-white/10 bg-white/10 px-3 py-2 dark:bg-zinc-950/20"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                                {m.home_team} – {m.away_team}
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                {m._from_watchlist_only ? (
+                                  <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
+                                    NON IN CALENDARIO
+                                  </span>
+                                ) : null}
+                                {badgeList(m).map((b) => (
+                                  <span
+                                    key={b.label}
+                                    className={[
+                                      "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
+                                      b.label === "NO BET"
+                                        ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                                        : b.kind === "live"
+                                        ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                                        : b.kind === "top"
+                                          ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                          : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                                    ].join(" ")}
+                                  >
+                                    {b.label}
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                                {`${m.league ?? m.competition ?? m.championship ?? "Match"}${
+                                  formatKickoffTime(m) ? ` · ${formatKickoffTime(m)}` : ""
+                                }`}
+                              </div>
                             </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              {m._from_watchlist_only ? (
-                                <span className="rounded-full border border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-zinc-700 dark:text-zinc-300">
-                                  NON IN CALENDARIO
-                                </span>
-                              ) : null}
-                              {badgeList(m).map((b) => (
-                                <span
-                                  key={b.label}
-                                  className={[
-                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
-                                    b.kind === "live"
-                                      ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
-                                      : b.kind === "top"
-                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                                        : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                                  ].join(" ")}
-                                >
-                                  {b.label}
-                                </span>
-                              ))}
-                            </div>
-                            <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                              {`${m.league ?? m.competition ?? m.championship ?? "Match"}${formatKickoffTime(m) ? ` · ${formatKickoffTime(m)}` : ""}`}
-                            </div>
-                          </div>
-                          <div className="ml-3 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => togglePin(m)}
-                              className={[
-                                "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                                isPinned(m)
-                                  ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              ].join(" ")}
-                              title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
-                              aria-pressed={isPinned(m)}
-                            >
-                              📌
-                            </button>
 
-                            <button
-                              type="button"
-                              onClick={() => toggleWatch(m)}
-                              className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              aria-label="Rimuovi dai preferiti"
-                              title="Rimuovi dai preferiti"
-                            >
-                              ★
-                            </button>
+                            <div className="ml-3 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => togglePin(m)}
+                                className={[
+                                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                                  isPinned(m)
+                                    ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                                ].join(" ")}
+                                title={isPinned(m) ? "Rimuovi PIN" : "Metti in PIN (max 3)"}
+                                aria-pressed={isPinned(m)}
+                              >
+                                📌
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleWatch(m)}
+                                className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                                aria-label="Rimuovi dai preferiti"
+                                title="Rimuovi dai preferiti"
+                              >
+                                ★
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      ))}
-                    </div>
+                      )}
+                    />
                   ) : (
                     <div className="text-sm text-zinc-600 dark:text-zinc-300">
                       {watchSearch ? "Nessun preferito corrisponde alla ricerca." : "Nessun preferito. Tocca ☆ su una partita per aggiungerla."}
@@ -1654,19 +1710,54 @@ export function StatisticalPredictionsDashboard() {
               </label>
             </div>
 
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setOnlyGood((v) => !v)}
+                className={[
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                  onlyGood
+                    ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                ].join(" ")}
+                aria-pressed={onlyGood}
+              >
+                Solo Qualità A/B
+              </button>
+              <button
+                type="button"
+                onClick={() => setHideNoBet((v) => !v)}
+                className={[
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                  hideNoBet
+                    ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                ].join(" ")}
+                aria-pressed={hideNoBet}
+              >
+                {hideNoBet ? "NO BET nascosti" : "Mostra NO BET"}
+              </button>
+            </div>
+
             <div className="mt-4 space-y-3">
               {nextMatches.length ? (
                 nextMatches.map((m) => {
                   const p1 = safeProb(m, "home_win")
                   const px = safeProb(m, "draw")
                   const p2 = safeProb(m, "away_win")
+                  const mWithP = { ...m, p1, px, p2 }
+                  const { best: bestPick } = topTwoPicks(mWithP)
                   const kickoffLabel = formatKickoff(m.kickoff_unix)
-                  const open = openMatchExplainId === m.match_id
+                  const open = expandedMatchId === m.match_id
                   const watched = isWatched(m)
                   const conf = confidenceLabel(Number(m.confidence ?? 0))
                   const risk = matchRisk(m)
                   const pct = educationalOnly ? 0 : stakePctForProfile(profile, conf, risk)
                   const units = educationalOnly ? 0 : stakeUnits(bankroll, pct)
+                  const q = qualityScore(m)
+                  const r = riskLabel(m)
+                  const noBet = isNoBet(m)
+                  const advice = adviceLine(mWithP)
                   const marketOk = !!multiMarket && String(multiMarket.match_id ?? "") === String(m.match_id ?? "")
                   const markets0 = marketOk ? (multiMarket?.markets ?? {}) : {}
                   const markets = marketOk ? filterMarketsByTenant(markets0, tenantConfig?.filters?.active_markets) : {}
@@ -1683,43 +1774,29 @@ export function StatisticalPredictionsDashboard() {
                         ...marketKeys.filter((k) => !["1X2", "OVER_2_5", "BTTS"].includes(k))
                       ]
                   return (
-                    <div
+                    <NextMatchItem
                       key={m.match_id}
-                      className="rounded-2xl border border-white/10 bg-white/10 px-3 py-3 backdrop-blur-md dark:bg-zinc-950/20"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                              {m.home_team} <span className="text-zinc-500 dark:text-zinc-400">vs</span> {m.away_team}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => toggleWatch(m)}
-                              className={[
-                                "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold shadow-sm transition",
-                                watched
-                                  ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
-                              ].join(" ")}
-                              aria-pressed={watched}
-                              title={watched ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}
-                            >
-                              {watched ? "★" : "☆"}
-                            </button>
-                          </div>
-                          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                            {kickoffLabel ? <span>{kickoffLabel} · </span> : null}
-                            Conf {fmtPct(bestProb(m))} · {m.status}
-                          </div>
-                        </div>
+                      m={m}
+                      matchKey={matchId(m)}
+                      watched={watched}
+                      onToggleWatch={() => onToggleWatch(m)}
+                      titleRight={
                         <div className="shrink-0 flex flex-col items-end gap-2 text-right">
+                          <span
+                            className={[
+                              "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                              pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
+                            ].join(" ")}
+                            title={[advice, bestPick ? `Pick: ${bestPick.label}` : ""].filter(Boolean).join(" ")}
+                          >
+                            {q.grade}
+                          </span>
                           <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
                             {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                              {educationalOnly ? "Educational only" : `Stake ${units}u (${pct.toFixed(2)}%)`}
+                              {educationalOnly ? "Educational only" : noBet ? "NO BET" : `Stake ${units}u (${pct.toFixed(2)}%)`}
                             </div>
                             {profile === "PRUDENT" || pct <= 2.0 ? (
                               <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
@@ -1727,139 +1804,235 @@ export function StatisticalPredictionsDashboard() {
                               </span>
                             ) : null}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => toggleExplainMatch(m.match_id)}
-                            className={[
-                              "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
-                              open
-                                ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
-                                : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
-                            ].join(" ")}
-                          >
-                            Perché?
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDetailMatch(mWithP)
+                                setDetailOpen(true)
+                              }}
+                              className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:text-zinc-200"
+                            >
+                              Dettagli
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleExplainMatch(m.match_id)}
+                              className={[
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                                open
+                                  ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                              ].join(" ")}
+                            >
+                              Perché?
+                            </button>
+                          </div>
                         </div>
+                      }
+                    >
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span
+                          className={[
+                            "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                            pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
+                          ].join(" ")}
+                        >
+                          Qualità {q.grade}
+                        </span>
+                        <span
+                          className={[
+                            "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                            pillClass(r.tone === "green" ? "green" : r.tone === "yellow" ? "yellow" : "red")
+                          ].join(" ")}
+                        >
+                          Rischio {r.label}
+                        </span>
+                        {noBet ? (
+                          <span className={["rounded-full border px-2 py-0.5 text-[10px] font-bold", pillClass("zinc")].join(" ")}>
+                            NO BET
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/30">
-                        <div className="flex h-7 w-full text-[11px] font-semibold text-white">
-                          <div className="grid place-items-center bg-blue-500/70" style={{ width: `${Math.round(p1 * 100)}%` }}>1</div>
-                          <div className="grid place-items-center bg-violet-500/70" style={{ width: `${Math.round(px * 100)}%` }}>X</div>
-                          <div className="grid place-items-center bg-rose-500/70" style={{ width: `${Math.round(p2 * 100)}%` }}>2</div>
-                        </div>
+                      <div className="mt-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 dark:bg-zinc-950/20 dark:text-zinc-50">
+                        {advice}
                       </div>
-                      {open ? (
-                        <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-                          <div className="space-y-3">
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="font-semibold text-zinc-900 dark:text-zinc-50">Mercati</div>
-                                {bestMk && markets[bestMk] ? (
-                                  <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                                    Migliore: {marketDisplayName(bestMk)} · Conf {Number(markets[bestMk].confidence ?? 0)}% · Risk {String(markets[bestMk].risk ?? "")}
-                                  </div>
-                                ) : null}
+                      {(() => {
+                        const { best, alt } = topTwoPicks(mWithP)
+                        if (!best) return null
+                        if (isNoBet(m)) return null
+
+                        const bestPct = fmtPct(Number(best.prob))
+                        const altPct = alt ? fmtPct(Number(alt.prob)) : null
+
+                        return (
+                          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                              <div className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Migliore</div>
+                              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{best.label}</div>
+                              <div className="mt-1 text-xs text-zinc-700 dark:text-zinc-200">
+                                Probabilità: <span className="font-bold">{bestPct}</span>
                               </div>
+                            </div>
 
-                              {multiMarketLoading ? (
-                                <div>Caricamento…</div>
-                              ) : multiMarketError && !marketOk ? (
-                                <div>{multiMarketError}</div>
-                              ) : !marketOk ? (
-                                <div>n/d</div>
-                              ) : (
+                            {alt ? (
+                              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+                                <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Alternativa</div>
+                                <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{alt.label}</div>
+                                <div className="mt-1 text-xs text-zinc-700 dark:text-zinc-200">
+                                  Probabilità: <span className="font-bold">{altPct}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-sm text-zinc-600 dark:bg-zinc-950/20 dark:text-zinc-300">
+                                Nessuna alternativa disponibile.
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                        {kickoffLabel ? <span>{kickoffLabel} · </span> : null}
+                        Conf {fmtPct(bestProb(m))} · {m.status}
+                      </div>
+                      {(() => {
+                        const r = riskLabel(m)
+                        const nobet = isNoBet(m)
+                        if (!nobet && r.tone !== "red") return null
+                        return (
+                          <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
+                            <span className="font-semibold">Perché:</span>{" "}
+                            {nobet ? noBetReason(m) : "Rischio alto: segnali non allineati"}
+                          </div>
+                        )
+                      })()}
+                      {!noBet ? (
+                        <>
+                          <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-zinc-950/30">
+                            <div className="flex h-7 w-full text-[11px] font-semibold text-white">
+                              <div className="grid place-items-center bg-blue-500/70" style={{ width: `${Math.round(p1 * 100)}%` }}>1</div>
+                              <div className="grid place-items-center bg-violet-500/70" style={{ width: `${Math.round(px * 100)}%` }}>X</div>
+                              <div className="grid place-items-center bg-rose-500/70" style={{ width: `${Math.round(p2 * 100)}%` }}>2</div>
+                            </div>
+                          </div>
+                          {open ? (
+                            <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                              <div className="space-y-3">
                                 <div className="space-y-2">
-                                  <div className="flex flex-wrap gap-2">
-                                    {orderedMarketKeys.map((k) => {
-                                      const mk = markets[k]
-                                      const active = selectedMk === k
-                                      const best = bestMk === k
-                                      const unstable = mk ? isUnstableMarket(mk) : false
-                                      return (
-                                        <button
-                                          key={`mk-${m.match_id}-${k}`}
-                                          type="button"
-                                          onClick={() => setSelectedMarketKey(k)}
-                                          className={[
-                                            "flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
-                                            active
-                                              ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
-                                              : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
-                                          ].join(" ")}
-                                        >
-                                          <span>{marketDisplayName(k)}</span>
-                                          {mk ? (
-                                            <span className="text-[10px] text-zinc-600 dark:text-zinc-300">
-                                              {Number(mk.confidence ?? 0)}% · {String(mk.risk ?? "")}
-                                            </span>
-                                          ) : null}
-                                          {best ? (
-                                            <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
-                                              migliore
-                                            </span>
-                                          ) : null}
-                                          {unstable ? (
-                                            <span className="rounded-full border border-amber-400/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
-                                              instabile
-                                            </span>
-                                          ) : null}
-                                        </button>
-                                      )
-                                    })}
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="font-semibold text-zinc-900 dark:text-zinc-50">Mercati</div>
+                                    {bestMk && markets[bestMk] ? (
+                                      <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                                        Migliore: {marketDisplayName(bestMk)} · Conf {Number(markets[bestMk].confidence ?? 0)}% · Risk {String(markets[bestMk].risk ?? "")}
+                                      </div>
+                                    ) : null}
                                   </div>
 
-                                  {selectedMarket ? (
-                                    <div className="rounded-xl border border-white/10 bg-white/10 p-3 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{marketDisplayName(selectedMk)}</div>
-                                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                                          Prob {fmtPct(Number(selectedMarket.probability ?? 0))} · Conf {Number(selectedMarket.confidence ?? 0)}% · Risk {String(selectedMarket.risk ?? "")}
-                                        </div>
+                                  {multiMarketLoading ? (
+                                    <div>Caricamento…</div>
+                                  ) : multiMarketError && !marketOk ? (
+                                    <div>{multiMarketError}</div>
+                                  ) : !marketOk ? (
+                                    <div>n/d</div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      <div className="flex flex-wrap gap-2">
+                                        {orderedMarketKeys.map((k) => {
+                                          const mk = markets[k]
+                                          const active = selectedMk === k
+                                          const best = bestMk === k
+                                          const unstable = mk ? isUnstableMarket(mk) : false
+                                          return (
+                                            <button
+                                              key={`mk-${m.match_id}-${k}`}
+                                              type="button"
+                                              onClick={() => setSelectedMarketKey(k)}
+                                              className={[
+                                                "flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                                                active
+                                                  ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                                              ].join(" ")}
+                                            >
+                                              <span>{marketDisplayName(k)}</span>
+                                              {mk ? (
+                                                <span className="text-[10px] text-zinc-600 dark:text-zinc-300">
+                                                  {Number(mk.confidence ?? 0)}% · {String(mk.risk ?? "")}
+                                                </span>
+                                              ) : null}
+                                              {best ? (
+                                                <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                                  migliore
+                                                </span>
+                                              ) : null}
+                                              {unstable ? (
+                                                <span className="rounded-full border border-amber-400/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+                                                  instabile
+                                                </span>
+                                              ) : null}
+                                            </button>
+                                          )
+                                        })}
                                       </div>
-                                      {isUnstableMarket(selectedMarket) ? (
-                                        <div className="mt-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
-                                          Warning: mercato instabile (confidence bassa o rischio HIGH)
+
+                                      {selectedMarket ? (
+                                        <div className="rounded-xl border border-white/10 bg-white/10 p-3 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{marketDisplayName(selectedMk)}</div>
+                                            <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                                              Prob {fmtPct(Number(selectedMarket.probability ?? 0))} · Conf {Number(selectedMarket.confidence ?? 0)}% · Risk {String(selectedMarket.risk ?? "")}
+                                            </div>
+                                          </div>
+                                          {isUnstableMarket(selectedMarket) ? (
+                                            <div className="mt-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                                              Warning: mercato instabile (confidence bassa o rischio HIGH)
+                                            </div>
+                                          ) : null}
                                         </div>
                                       ) : null}
                                     </div>
-                                  ) : null}
+                                  )}
                                 </div>
-                              )}
-                            </div>
 
-                            <div>
-                              {matchExplainLoading ? (
-                                <div>Caricamento…</div>
-                              ) : matchExplainError ? (
-                                <div>{matchExplainError}</div>
-                              ) : !matchExplain ? (
-                                <div>n/d</div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <div className="font-semibold text-zinc-900 dark:text-zinc-50">
-                                    {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
-                                    {matchExplain.pick ? <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span> : null}
-                                  </div>
-                                  <div className="space-y-1">
-                                    {(matchExplain.why ?? []).map((t, i) => (
-                                      <div key={`why-${i}`}>• {t}</div>
-                                    ))}
-                                  </div>
-                                  {(matchExplain.risks ?? []).length ? (
-                                    <div className="space-y-1">
-                                      <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
-                                      {(matchExplain.risks ?? []).map((t, i) => (
-                                        <div key={`risk-${i}`}>• {t}</div>
-                                      ))}
+                                <div>
+                                  {matchExplainLoading ? (
+                                    <div>Caricamento…</div>
+                                  ) : matchExplainError ? (
+                                    <div>{matchExplainError}</div>
+                                  ) : !matchExplain ? (
+                                    <div>n/d</div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      <div className="font-semibold text-zinc-900 dark:text-zinc-50">
+                                        {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
+                                        {matchExplain.pick ? <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span> : null}
+                                      </div>
+                                      <div className="space-y-1">
+                                        {(matchExplain.why ?? []).map((t, i) => (
+                                          <div key={`why-${i}`}>• {t}</div>
+                                        ))}
+                                      </div>
+                                      {(matchExplain.risks ?? []).length ? (
+                                        <div className="space-y-1">
+                                          <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
+                                          {(matchExplain.risks ?? []).map((t, i) => (
+                                            <div key={`risk-${i}`}>• {t}</div>
+                                          ))}
+                                        </div>
+                                      ) : null}
                                     </div>
-                                  ) : null}
+                                  )}
                                 </div>
-                              )}
+                              </div>
                             </div>
-                          </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="mt-3 text-xs text-zinc-600 dark:text-zinc-300">
+                          Match mostrato solo per completezza: segnali deboli (NO BET).
                         </div>
-                      ) : null}
-                    </div>
+                      )}
+                    </NextMatchItem>
                   )
                 })
               ) : (
@@ -1871,18 +2044,7 @@ export function StatisticalPredictionsDashboard() {
           <Card className="!bg-white/10 dark:!bg-zinc-950/25">
             <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Win Probability Chart</div>
             <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Trend medio 1 / X / 2 per giornata</div>
-            <div className="mt-4 h-52 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trend}>
-                  <XAxis dataKey="md" hide />
-                  <YAxis domain={[0, 1]} tickFormatter={(v) => `${Math.round(Number(v) * 100)}%`} />
-                  <Tooltip formatter={(v) => fmtPct(Number(v))} />
-                  <Line type="monotone" dataKey="p1" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="px" stroke="#a855f7" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="p2" stroke="#f43f5e" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <WinProbabilityChart trend={trend} fmtPct={fmtPct} />
           </Card>
         </div>
 
@@ -2096,30 +2258,7 @@ export function StatisticalPredictionsDashboard() {
             </div>
           </div>
 
-          <div className="mt-4 h-56 rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
-            {trackSeries.length ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trackSeries}>
-                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                  <YAxis yAxisId="acc" domain={[0, 1]} tickFormatter={(v) => `${Math.round(Number(v) * 100)}%`} />
-                  <YAxis yAxisId="roi" orientation="right" tickFormatter={(v) => fmtSigned(Number(v))} />
-                  <Tooltip
-                    formatter={(value, name) => {
-                      if (name === "accuracy") return [fmtPct(Number(value)), "Accuracy"]
-                      if (name === "roi_total") return [fmtSigned(Number(value)), "ROI tot"]
-                      return [String(value), String(name)]
-                    }}
-                  />
-                  <Line yAxisId="acc" type="monotone" dataKey="accuracy" stroke="#22c55e" strokeWidth={2} dot={false} />
-                  <Line yAxisId="roi" type="monotone" dataKey="roi_total" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="grid h-full place-items-center text-sm text-zinc-600 dark:text-zinc-300">
-                {trackError ? trackError : "n/d"}
-              </div>
-            )}
-          </div>
+          <TrackRecordChart trackSeries={trackSeries} fmtPct={fmtPct} fmtSigned={fmtSigned} trackError={trackError ?? undefined} />
         </Card>
 
         <Card className="!bg-white/10 dark:!bg-zinc-950/25">
@@ -2161,6 +2300,71 @@ export function StatisticalPredictionsDashboard() {
           </div>
         </Card>
       </div>
+
+      <Modal
+        open={detailOpen}
+        title={
+          detailMatch
+            ? `${detailMatch.home_team ?? ""} – ${detailMatch.away_team ?? ""}`
+            : "Dettagli"
+        }
+        onClose={() => {
+          setDetailOpen(false)
+          setDetailMatch(null)
+        }}
+      >
+        {detailMatch ? (
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+              <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Consiglio</div>
+              <div className="mt-1 text-sm text-zinc-900 dark:text-zinc-50">
+                {adviceLine(detailMatch)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+              <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Indicatori</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(() => {
+                  const q = qualityScore(detailMatch)
+                  const r = riskLabel(detailMatch)
+                  return (
+                    <>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(
+                          q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red"
+                        )}`}
+                      >
+                        Qualità {q.grade}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(
+                          r.tone === "green" ? "green" : r.tone === "yellow" ? "yellow" : "red"
+                        )}`}
+                      >
+                        Rischio {r.label}
+                      </span>
+                      {isNoBet(detailMatch) ? (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass("zinc")}`}
+                        >
+                          NO BET
+                        </span>
+                      ) : null}
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+              Dettagli avanzati: qui puoi mostrare eventuali spiegazioni estese, feature, o dati modello (se disponibili).
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-zinc-600 dark:text-zinc-300">n/d</div>
+        )}
+      </Modal>
     </div>
   )
 }

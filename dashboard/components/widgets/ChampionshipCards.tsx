@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 
-import { apiUrl, getApiBaseUrl } from "@/components/api/client"
+import { apiFetch, getApiBaseUrl } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
 
 type OverviewMatch = {
@@ -65,7 +65,7 @@ export function ChampionshipCards() {
 
     async function loadStatus() {
       try {
-        const res = await fetch(apiUrl("/api/v1/system/status"), { cache: "no-store" })
+        const res = await apiFetch("/api/v1/system/status", { cache: "no-store" })
         if (!res.ok) return
         const json = (await res.json()) as SystemStatusResponse
         if (active) setStatus(json)
@@ -74,7 +74,7 @@ export function ChampionshipCards() {
 
     async function run() {
       try {
-        const res = await fetch(apiUrl("/api/v1/overview/championships"), { cache: "no-store" })
+        const res = await apiFetch("/api/v1/overview/championships", { cache: "no-store" })
         if (!res.ok) {
           let detail = ""
           try {
