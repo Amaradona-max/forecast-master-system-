@@ -22,6 +22,7 @@ export function ResponsiveShell() {
   const [active, setActive] = useState<Section>("pred")
   const [collapsed, setCollapsed] = useState(false)
   const [legendOpen, setLegendOpen] = useState(false)
+  const [howToOpen, setHowToOpen] = useState(false)
 
   const Content = () => {
     if (active === "pred") return <StatisticalPredictionsDashboard />
@@ -86,6 +87,17 @@ export function ResponsiveShell() {
             ].join(" ")}
           >
             {collapsed ? "L" : "Legenda"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setHowToOpen(true)}
+            className={[
+              "w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition",
+              "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            ].join(" ")}
+          >
+            {collapsed ? "?" : "Come usare l'App"}
           </button>
         </nav>
 
@@ -164,6 +176,66 @@ export function ResponsiveShell() {
               <div>CONF: confidence alta.</div>
               <div>NO BET: segnali insufficienti o rischio troppo alto.</div>
               <div>+Xm / +Xh: inizio imminente.</div>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={howToOpen} title="Come usare l'App" onClose={() => setHowToOpen(false)}>
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">1) Scegli la sezione</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>Previsioni: lista partite con probabilità, qualità e consigli.</div>
+              <div>Live: monitoraggio in tempo reale (se dati disponibili).</div>
+              <div>Accuracy: andamento e performance del modello.</div>
+              <div>Confronto: confronto rapido tra leghe.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">2) In Previsioni, imposta campionato e giornata</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>In alto seleziona il campionato (es. Serie A, Premier…).</div>
+              <div>Seleziona la giornata dal menu (quando disponibile).</div>
+              <div>Usa “Ordina” per vedere prima probabilità, confidence o orario.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">3) Scegli il profilo</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>Prudente: mostra solo match con confidence alta e rischio basso.</div>
+              <div>Bilanciato: filtra i match più “ragionevoli” (default).</div>
+              <div>Aggressivo: include anche match più rischiosi.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">4) Usa i filtri per trovare i match giusti</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>Cerca squadra: digita il nome (es. Inter, Milan…).</div>
+              <div>Solo Qualità A/B: mostra solo le partite più affidabili.</div>
+              <div>Nascondi NO BET: nasconde i match con segnali deboli.</div>
+              <div>Se non vedi nulla, premi “Reset filtri”.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">5) Apri i dettagli e salva i preferiti</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>Apri una partita per vedere mercati, motivazioni e rischi.</div>
+              <div>Usa ☆ per aggiungere ai Preferiti e PIN per fissare in alto.</div>
+              <div>Usa “Dettagli” per il riepilogo completo della partita.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">6) Legenda e lettura veloce</div>
+            <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
+              <div>Apri “Legenda” per capire badge (LIVE, TOP, CONF, NO BET) e livelli.</div>
+              <div>Qualità (A→D) riassume probabilità e confidence.</div>
+              <div>Rischio (Basso/Medio/Alto) indica quanto è “solido” il segnale.</div>
             </div>
           </div>
         </div>

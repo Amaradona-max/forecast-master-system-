@@ -49,6 +49,10 @@ export function getApiBaseUrl() {
   const env = process.env.NEXT_PUBLIC_API_BASE_URL
   const normalizedEnv = normalizeApiBaseUrl(env)
   if (normalizedEnv) return normalizedEnv
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname
+    if (host === "localhost" || host === "127.0.0.1") return "http://localhost:8000"
+  }
   if (process.env.NODE_ENV === "development") return "http://localhost:8000"
   return ""
 }

@@ -385,7 +385,7 @@ export function StatisticalPredictionsDashboard() {
   const [matchQuery, setMatchQuery] = useState<string>("")
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
   const [onlyGood, setOnlyGood] = useState<boolean>(false)
-  const [hideNoBet, setHideNoBet] = useState<boolean>(true)
+  const [hideNoBet, setHideNoBet] = useState<boolean>(false)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailMatch, setDetailMatch] = useState<(OverviewMatch & { p1: number; px: number; p2: number }) | null>(null)
   const [watchSearch, setWatchSearch] = useState<string>("")
@@ -928,7 +928,10 @@ export function StatisticalPredictionsDashboard() {
   const tenantMinConfidence = String(tenantConfig?.filters?.min_confidence ?? "LOW").toUpperCase()
   const visibleToPlay = useMemo(() => {
     const minRank = confidenceRank(tenantMinConfidence)
-    return toPlay.filter((m) => matchAllowedByProfile(m, profile) && confidenceRank(confidenceLabel(Number(m.confidence ?? 0))) >= minRank)
+    const base = toPlay.filter((m) => confidenceRank(confidenceLabel(Number(m.confidence ?? 0))) >= minRank)
+    const filtered = base.filter((m) => matchAllowedByProfile(m, profile))
+    if (profile === "BALANCED" && base.length && filtered.length === 0) return base
+    return filtered
   }, [profile, tenantMinConfidence, toPlay])
   const watchlistMatches = useMemo(() => {
     if (!watchlist.length) return []
@@ -1735,7 +1738,7 @@ export function StatisticalPredictionsDashboard() {
                 ].join(" ")}
                 aria-pressed={hideNoBet}
               >
-                {hideNoBet ? "NO BET nascosti" : "Mostra NO BET"}
+                {hideNoBet ? "Mostra NO BET" : "Nascondi NO BET"}
               </button>
             </div>
 
@@ -2036,7 +2039,36 @@ export function StatisticalPredictionsDashboard() {
                   )
                 })
               ) : (
-                <div className="text-sm text-zinc-600 dark:text-zinc-300">Nessuna gara disponibile.</div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-zinc-700 backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200">
+                  <div className="font-semibold text-zinc-900 dark:text-zinc-50">Nessuna gara visibile.</div>
+                  <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                    {visibleToPlay.length
+                      ? "I filtri attivi stanno escludendo tutte le partite. Disattiva “Solo Qualità A/B”, “Nascondi NO BET” o svuota la ricerca."
+                      : "Nessuna partita disponibile per il profilo/tenant selezionato."}
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOnlyGood(false)
+                        setHideNoBet(false)
+                        setMatchQuery("")
+                      }}
+                      className="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200"
+                    >
+                      Reset filtri
+                    </button>
+                    {hideNoBet ? (
+                      <button
+                        type="button"
+                        onClick={() => setHideNoBet(false)}
+                        className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm transition dark:text-emerald-300"
+                      >
+                        Mostra NO BET
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               )}
             </div>
           </Card>
