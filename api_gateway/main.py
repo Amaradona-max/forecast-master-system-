@@ -20,10 +20,14 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from api_gateway.app.auto_refresh_orchestrator import AutoRefreshOrchestrator
+from api_gateway.app.backtest_metrics import rebuild_backtest_metrics_to_file
+from api_gateway.app.calibration_alpha import rebuild_calibration_alpha
+from api_gateway.app.decision_gate_tuning import rebuild_decision_gate_tuned
 from api_gateway.app.local_files import load_calendar_fixtures
 from api_gateway.app.services import PredictionService
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState, LiveMatchState
+from api_gateway.app.team_form import rebuild_team_form_from_football_data
 from api_gateway.app.ws import LiveUpdateEvent, WebSocketHub
 from api_gateway.middleware.rate_limit import rate_limit_middleware
 from api_gateway.middleware.request_limits import request_limits_middleware
@@ -264,6 +268,174 @@ async def _ratings_scheduler(provider: str) -> None:
                 app.state._ratings_refresh_last_unix = now0
                 with contextlib.suppress(Exception):
                     await _rebuild_team_ratings_from_football_data()
+
+        await asyncio.sleep(300)
+
+
+async def _form_scheduler(provider: str) -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if provider != "football_data":
+            await asyncio.sleep(300)
+            continue
+        if not bool(getattr(settings, "form_refresh_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        key = str(getattr(settings, "football_data_key", "") or "").strip()
+        if not key:
+            await asyncio.sleep(300)
+            continue
+
+        codes = getattr(settings, "football_data_competition_codes", {})
+        if not isinstance(codes, dict) or not codes:
+            await asyncio.sleep(300)
+            continue
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        weekend_interval = float(getattr(settings, "form_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "form_refresh_interval_seconds", 21600) or 21600)
+
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_form_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._form_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_team_form_from_football_data(
+                    codes={str(k): str(v) for k, v in codes.items()},
+                    api_base_url=str(getattr(settings, "football_data_base_url", "")),
+                    api_key=key,
+                    season_start_utc_iso=str(getattr(settings, "fixtures_season_start_utc", "2025-08-01T00:00:00Z")),
+                    season_end_utc_iso=str(getattr(settings, "fixtures_season_end_utc", "2026-06-30T23:59:59Z")),
+                    form_path=str(getattr(settings, "form_path", "data/team_form.json")),
+                    window=int(getattr(settings, "form_window_matches", 5)),
+                )
+
+        await asyncio.sleep(300)
+
+
+async def _alpha_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "calibration_alpha_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        weekend_interval = float(getattr(settings, "calibration_alpha_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "calibration_alpha_refresh_interval_seconds", 21600) or 21600)
+
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_alpha_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._alpha_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_calibration_alpha(
+                    db_path=str(getattr(settings, "state_db_path", "data/forecast_state.sqlite3")),
+                    out_path=str(getattr(settings, "calibration_alpha_path", "data/calibration_alpha.json")),
+                    lookback_days=int(getattr(settings, "calibration_alpha_lookback_days", 60)),
+                    per_league_limit=int(getattr(settings, "calibration_alpha_per_league_limit", 600)),
+                    min_samples=int(getattr(settings, "calibration_alpha_min_samples", 40)),
+                    market="1x2",
+                )
+
+        await asyncio.sleep(300)
+
+
+async def _backtest_metrics_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "backtest_metrics_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        weekend_interval = float(getattr(settings, "backtest_metrics_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "backtest_metrics_refresh_interval_seconds", 21600) or 21600)
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_backtest_metrics_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._backtest_metrics_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_backtest_metrics_to_file(
+                    db_path=str(getattr(settings, "state_db_path", "data/forecast_state.sqlite3")),
+                    out_path=str(getattr(settings, "backtest_metrics_path", "data/backtest_metrics.json")),
+                    lookback_days=int(getattr(settings, "backtest_metrics_lookback_days", 60)),
+                    per_league_limit=int(getattr(settings, "backtest_metrics_per_league_limit", 800)),
+                    min_samples=int(getattr(settings, "backtest_metrics_min_samples", 60)),
+                    market="1x2",
+                    ece_bins=int(getattr(settings, "backtest_metrics_ece_bins", 10)),
+                )
+
+        await asyncio.sleep(300)
+
+
+async def _decision_gate_tuning_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "decision_gate_tuning_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        weekend_interval = float(getattr(settings, "decision_gate_tuning_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "decision_gate_tuning_refresh_interval_seconds", 21600) or 21600)
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_decision_gate_tuning_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._decision_gate_tuning_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_decision_gate_tuned(
+                    backtest_metrics_path=str(getattr(settings, "backtest_metrics_path", "data/backtest_metrics.json")),
+                    base_thresholds=getattr(settings, "decision_gate_thresholds", {}) or {},
+                    out_path=str(getattr(settings, "decision_gate_tuned_path", "data/decision_gate_tuned.json")),
+                )
 
         await asyncio.sleep(300)
 
@@ -578,6 +750,13 @@ async def startup() -> None:
         app.state.seed_task = asyncio.create_task(_seed_scheduler(provider, app.state.app_state, app.state.ws_hub))
     if provider == "football_data" and not os.getenv("VERCEL"):
         app.state.ratings_task = asyncio.create_task(_ratings_scheduler(provider))
+        app.state.form_task = asyncio.create_task(_form_scheduler(provider))
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.calibration_alpha_task = asyncio.create_task(_alpha_scheduler())
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.backtest_metrics_task = asyncio.create_task(_backtest_metrics_scheduler())
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.decision_gate_tuning_task = asyncio.create_task(_decision_gate_tuning_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.notifications_task = asyncio.create_task(_notifications_scheduler(provider, app.state.app_state, app.state.ws_hub))
 
@@ -595,6 +774,26 @@ async def shutdown() -> None:
         with contextlib.suppress(Exception):
             await task
     task = getattr(app.state, "ratings_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "form_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "calibration_alpha_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "backtest_metrics_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "decision_gate_tuning_task", None)
     if task is not None:
         task.cancel()
         with contextlib.suppress(Exception):

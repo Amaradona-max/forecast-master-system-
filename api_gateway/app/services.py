@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,10 @@ from ml_engine.features.schema import FEATURE_VERSION
 from ml_engine.resilience.degradation import build_degradation
 from ml_engine.resilience.timeouts import time_left_ms
 from ml_engine.config import artifact_dir, cache_db_path
+from api_gateway.app.decision_gate import evaluate_decision, load_tuned_thresholds, select_thresholds
 from api_gateway.app.settings import settings
+from api_gateway.app.team_name_resolver import TeamNameResolver
+from api_gateway.app.team_name_resolver import canonicalize
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,13 @@ class PredictionResult:
 class PredictionService:
     def __init__(self) -> None:
         self._ensemble = EnsemblePredictorService()
+        self._team_resolver = TeamNameResolver(
+            aliases_path=str(getattr(settings, "team_aliases_path", "data/team_aliases.json")),
+            enable_fuzzy=bool(getattr(settings, "team_aliases_enable_fuzzy", True)),
+            fuzzy_cutoff=float(getattr(settings, "team_aliases_fuzzy_cutoff", 0.86)),
+        )
+        self._decision_gate_tuned_cache: dict[str, Any] | None = None
+        self._decision_gate_tuned_mtime_ns: int | None = None
 
     def _calibrate_probs(self, probs: dict[str, float], alpha: float) -> dict[str, float]:
         try:
@@ -59,6 +71,143 @@ class PredictionService:
             return "missing"
         return str(int(st.st_mtime_ns))
 
+    def _load_team_form(self) -> dict[str, Any] | None:
+        try:
+            p = Path(str(getattr(settings, "form_path", "data/team_form.json")))
+            raw = p.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _apply_form_context(self, *, championship: str, home_team: str, away_team: str, ctx: dict[str, Any]) -> None:
+        keys = ["home_pts_last5", "away_pts_last5", "home_gf_last5", "home_ga_last5", "away_gf_last5", "away_ga_last5"]
+        if any(k in ctx and isinstance(ctx.get(k), (int, float)) for k in keys):
+            return
+        data = self._load_team_form()
+        if not isinstance(data, dict):
+            return
+        champs = data.get("championships")
+        if not isinstance(champs, dict):
+            return
+        champ_row = champs.get(str(championship))
+        if not isinstance(champ_row, dict):
+            return
+        teams = champ_row.get("teams")
+        if not isinstance(teams, dict):
+            return
+
+        can_map: dict[str, str] = {}
+        for k in teams.keys():
+            if not isinstance(k, str):
+                continue
+            ck = canonicalize(k)
+            if ck and ck not in can_map:
+                can_map[ck] = k
+
+        def _lookup(team_name: str) -> dict[str, Any] | None:
+            row = teams.get(str(team_name))
+            if isinstance(row, dict):
+                return row
+            can = canonicalize(str(team_name))
+            if not can:
+                return None
+            mapped = can_map.get(can)
+            if isinstance(mapped, str):
+                row2 = teams.get(mapped)
+                if isinstance(row2, dict):
+                    return row2
+            if bool(getattr(settings, "team_aliases_enable_fuzzy", True)) and can_map:
+                cutoff = float(getattr(settings, "team_aliases_fuzzy_cutoff", 0.86) or 0.86)
+                best = get_close_matches(can, list(can_map.keys()), n=1, cutoff=cutoff)
+                if best:
+                    mapped2 = can_map.get(best[0])
+                    if isinstance(mapped2, str):
+                        row3 = teams.get(mapped2)
+                        if isinstance(row3, dict):
+                            return row3
+            return None
+
+        hr = _lookup(str(home_team))
+        ar = _lookup(str(away_team))
+        if isinstance(hr, dict):
+            ctx.setdefault("home_pts_last5", hr.get("pts_last5"))
+            ctx.setdefault("home_gf_last5", hr.get("gf_last5"))
+            ctx.setdefault("home_ga_last5", hr.get("ga_last5"))
+        if isinstance(ar, dict):
+            ctx.setdefault("away_pts_last5", ar.get("pts_last5"))
+            ctx.setdefault("away_gf_last5", ar.get("gf_last5"))
+            ctx.setdefault("away_ga_last5", ar.get("ga_last5"))
+
+    def _load_alpha_table(self) -> dict[str, Any] | None:
+        try:
+            p = Path(str(getattr(settings, "calibration_alpha_path", "data/calibration_alpha.json")))
+            raw = p.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _load_backtest_metrics(self) -> dict[str, Any] | None:
+        try:
+            p = Path(str(getattr(settings, "backtest_metrics_path", "data/backtest_metrics.json")))
+            raw = p.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _load_decision_gate_tuned(self) -> dict[str, Any] | None:
+        if not bool(getattr(settings, "decision_gate_tuning_enabled", True)):
+            return None
+        p = Path(str(getattr(settings, "decision_gate_tuned_path", "data/decision_gate_tuned.json")))
+        try:
+            st = p.stat()
+        except Exception:
+            return None
+        try:
+            mtime_ns = int(st.st_mtime_ns)
+        except Exception:
+            mtime_ns = None
+        if self._decision_gate_tuned_cache is not None and mtime_ns is not None and self._decision_gate_tuned_mtime_ns == mtime_ns:
+            return self._decision_gate_tuned_cache
+        th = load_tuned_thresholds(str(p))
+        if isinstance(th, dict) and th:
+            data = {"thresholds": th}
+            self._decision_gate_tuned_cache = data
+            self._decision_gate_tuned_mtime_ns = mtime_ns
+            return data
+        return None
+
+    def _decision_gate_cfg(self) -> dict[str, Any] | None:
+        tuned = self._load_decision_gate_tuned()
+        if isinstance(tuned, dict):
+            th = tuned.get("thresholds")
+            if isinstance(th, dict) and th:
+                return tuned
+        return getattr(settings, "decision_gate_thresholds", None)
+
+    def _apply_inseason_alpha(self, *, championship: str, ctx: dict[str, Any]) -> None:
+        cal = ctx.get("calibration")
+        if isinstance(cal, dict) and "alpha" in cal:
+            return
+
+        data = self._load_alpha_table()
+        if not isinstance(data, dict):
+            return
+        champs = data.get("championships")
+        if not isinstance(champs, dict):
+            return
+        row = champs.get(str(championship))
+        if not isinstance(row, dict):
+            return
+        try:
+            a = float(row.get("alpha", 0.0) or 0.0)
+        except Exception:
+            a = 0.0
+
+        ctx["calibration"] = {"alpha": float(a), "source": "inseason_alpha"}
+
     def _ttl_seconds(self, *, status: str, kickoff_unix: float | None, context: dict[str, Any]) -> int:
         if str(status or "").upper() == "LIVE":
             return 0
@@ -83,6 +232,20 @@ class PredictionService:
         if len(s) > 80:
             s = s[:80]
         return s
+    
+    def _resolve_team(self, *, championship: str, name: Any) -> str:
+        s = self._norm_team(name)
+        if not s:
+            return s
+        r = self._team_resolver
+        if r is None:
+            return s
+        try:
+            res = r.resolve(championship=str(championship), name=str(s))
+        except Exception:
+            return s
+        out = str(res.resolved or "").strip()
+        return out or s
 
     def predict_match(
         self,
@@ -97,14 +260,28 @@ class PredictionService:
     ) -> PredictionResult:
         ctx = dict(context or {})
         ctx["real_data_only"] = settings.real_data_only
+        # Applica alpha per campionato (calibration in-season) se non fornito dal client
+        self._apply_inseason_alpha(championship=str(championship), ctx=ctx)
         tl = time_left_ms()
         deadline_low = tl is not None and tl <= 150
         if tl is not None and tl <= 30:
+            probs = {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
             explain = {"degradation_level": 3, "warnings": ["deadline_low"], "safe_mode": True, "safe_mode_reason": "deadline_low"}
-            return PredictionResult(probabilities={"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}, explain=explain, confidence=0.0, ranges=None)
+            cfg = self._decision_gate_cfg()
+            explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
+            th = select_thresholds(str(championship), cfg)
+            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=0.0, thresholds=th)
+            return PredictionResult(probabilities=probs, explain=explain, confidence=0.0, ranges=None)
 
-        home_team_n = self._norm_team(home_team)
-        away_team_n = self._norm_team(away_team)
+        rh = self._team_resolver.resolve(championship=str(championship), name=str(home_team))
+        ra = self._team_resolver.resolve(championship=str(championship), name=str(away_team))
+        team_name_resolution = {
+            "home": {"raw": rh.raw, "resolved": rh.resolved, "method": rh.method, "canonical": rh.canonical, "score": rh.score},
+            "away": {"raw": ra.raw, "resolved": ra.resolved, "method": ra.method, "canonical": ra.canonical, "score": ra.score},
+        }
+        home_team_n = rh.resolved
+        away_team_n = ra.resolved
+        self._apply_form_context(championship=str(championship), home_team=home_team_n, away_team=away_team_n, ctx=ctx)
         match_key = str(match_id or f"{championship}|{home_team_n}|{away_team_n}").strip()
         if len(match_key) > 160:
             match_key = match_key[:160]
@@ -174,6 +351,30 @@ class PredictionService:
             explain["degradation_level"] = int(deg.level)
             explain["warnings"] = list(deg.warnings)
             explain["cache"] = {"hit": True, "key": str(cache_key)}
+            explain["team_name_resolution"] = team_name_resolution
+            cfg = self._decision_gate_cfg()
+            explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
+            th = select_thresholds(str(championship), cfg)
+            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=float(conf0) if isinstance(conf0, (int, float)) else None, thresholds=th)
+            try:
+                data = self._load_backtest_metrics()
+                if isinstance(data, dict):
+                    champs0 = data.get("championships")
+                    champs = champs0 if isinstance(champs0, dict) else data.get("leagues")
+                    if isinstance(champs, dict):
+                        row = champs.get(str(championship))
+                        if isinstance(row, dict):
+                            meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+                            explain["backtest_metrics"] = {
+                                "n": row.get("n"),
+                                "accuracy": row.get("accuracy"),
+                                "brier": row.get("brier"),
+                                "logloss": row.get("logloss") if row.get("logloss") is not None else row.get("log_loss"),
+                                "ece": row.get("ece"),
+                                "lookback_days": meta.get("lookback_days"),
+                            }
+            except Exception:
+                pass
             return PredictionResult(
                 probabilities=probs,
                 explain=explain,
@@ -222,6 +423,44 @@ class PredictionService:
         deg = build_degradation(cache_disabled=cache_disabled, calibration_disabled=calibration_disabled, deadline_low=deadline_low)
         explain["degradation_level"] = int(deg.level)
         explain["warnings"] = list(deg.warnings)
+        explain["team_name_resolution"] = team_name_resolution
+        # Decision Gate (server-side): NO BET + best pick + qualità/rischio
+        if bool(getattr(settings, "decision_gate_enabled", True)):
+            try:
+                cfg = self._decision_gate_cfg()
+                explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
+                th = select_thresholds(str(championship), cfg)
+                decision = evaluate_decision(
+                    championship=str(championship),
+                    probs=probs,
+                    confidence=float(conf) if isinstance(conf, (int, float)) else None,
+                    thresholds=th,
+                )
+                # mettiamo tutto in explain così il frontend può usarlo senza cambiare schema response
+                explain["decision"] = decision
+            except Exception:
+                # non deve mai rompere la prediction
+                pass
+
+        try:
+            data = self._load_backtest_metrics()
+            if isinstance(data, dict):
+                champs0 = data.get("championships")
+                champs = champs0 if isinstance(champs0, dict) else data.get("leagues")
+                if isinstance(champs, dict):
+                    row = champs.get(str(championship))
+                    if isinstance(row, dict):
+                        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+                        explain["backtest_metrics"] = {
+                            "n": row.get("n"),
+                            "accuracy": row.get("accuracy"),
+                            "brier": row.get("brier"),
+                            "logloss": row.get("logloss") if row.get("logloss") is not None else row.get("log_loss"),
+                            "ece": row.get("ece"),
+                            "lookback_days": meta.get("lookback_days"),
+                        }
+        except Exception:
+            pass
 
         out = PredictionResult(probabilities=probs, explain=explain, confidence=float(conf) if conf is not None else None, ranges=ranges)
 

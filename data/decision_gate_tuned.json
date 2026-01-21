@@ -1,0 +1,61 @@
+{
+  "generated_at_utc": "2026-01-21T20:00:17.797611+00:00",
+  "generated_at_unix": 1769025617.797747,
+  "meta": {
+    "model": "decision_gate_tuning_v1",
+    "source_metrics": "data/backtest_metrics.json",
+    "metrics_present": false,
+    "params": {
+      "ece_good": 0.06,
+      "ece_bad": 0.12,
+      "logloss_good": 0.98,
+      "logloss_bad": 1.08,
+      "max_delta_prob": 0.03,
+      "max_delta_conf": 0.03,
+      "max_delta_gap": 0.015,
+      "min_samples": 80
+    }
+  },
+  "thresholds": {
+    "bundesliga": {
+      "min_best_prob": 0.55,
+      "min_conf": 0.55,
+      "min_gap": 0.035,
+      "top_best_prob": 0.7,
+      "top_conf": 0.7,
+      "top_gap": 0.08
+    },
+    "default": {
+      "min_best_prob": 0.55,
+      "min_conf": 0.55,
+      "min_gap": 0.03,
+      "top_best_prob": 0.7,
+      "top_conf": 0.7,
+      "top_gap": 0.08
+    },
+    "la_liga": {
+      "min_best_prob": 0.56,
+      "min_conf": 0.55,
+      "min_gap": 0.03,
+      "top_best_prob": 0.7,
+      "top_conf": 0.7,
+      "top_gap": 0.08
+    },
+    "premier_league": {
+      "min_best_prob": 0.56,
+      "min_conf": 0.55,
+      "min_gap": 0.035,
+      "top_best_prob": 0.7,
+      "top_conf": 0.7,
+      "top_gap": 0.08
+    },
+    "serie_a": {
+      "min_best_prob": 0.55,
+      "min_conf": 0.55,
+      "min_gap": 0.03,
+      "top_best_prob": 0.7,
+      "top_conf": 0.7,
+      "top_gap": 0.08
+    }
+  }
+}

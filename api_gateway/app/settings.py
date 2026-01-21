@@ -19,6 +19,52 @@ class Settings(BaseSettings):
     data_provider: str = "mock"
     state_db_path: str = "/tmp/forecast_state.sqlite3" if os.getenv("VERCEL") else "data/forecast_state.sqlite3"
     calibration_lookback_days: int = 365
+    calibration_alpha_enabled: bool = True
+    calibration_alpha_path: str = "data/calibration_alpha.json"
+    calibration_alpha_refresh_interval_seconds: int = 21600  # 6 ore
+    calibration_alpha_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
+    calibration_alpha_lookback_days: int = 60
+    calibration_alpha_per_league_limit: int = 600
+    calibration_alpha_min_samples: int = 40
+    backtest_metrics_enabled: bool = True
+    backtest_metrics_path: str = "data/backtest_metrics.json"
+    backtest_metrics_refresh_interval_seconds: int = 21600  # 6 ore
+    backtest_metrics_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
+    backtest_metrics_lookback_days: int = 60
+    backtest_metrics_per_league_limit: int = 800
+    backtest_metrics_min_samples: int = 60
+    backtest_metrics_market: str = "1x2"
+    backtest_metrics_ece_bins: int = 10
+    decision_gate_enabled: bool = True
+    # soglie personalizzabili: default + override per campionato
+    # outcome keys: home_win/draw/away_win
+    decision_gate_thresholds: dict[str, dict[str, float]] = {
+        "default": {
+            "min_best_prob": 0.55,
+            "min_conf": 0.55,
+            "min_gap": 0.03,
+            "top_best_prob": 0.70,
+            "top_conf": 0.70,
+            "top_gap": 0.08,
+        },
+        # esempi (puoi ritoccarli dopo 2-3 giorni di utilizzo)
+        "serie_a": {"min_gap": 0.03},
+        "premier_league": {"min_best_prob": 0.56, "min_gap": 0.035},
+        "la_liga": {"min_best_prob": 0.56},
+        "bundesliga": {"min_gap": 0.035},
+    }
+    decision_gate_tuning_enabled: bool = True
+    decision_gate_tuned_path: str = "data/decision_gate_tuned.json"
+    decision_gate_tuning_refresh_interval_seconds: int = 21600  # 6 ore
+    decision_gate_tuning_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
+    decision_gate_tuning_ece_good: float = 0.06
+    decision_gate_tuning_ece_bad: float = 0.12
+    decision_gate_tuning_logloss_good: float = 0.98
+    decision_gate_tuning_logloss_bad: float = 1.08
+    decision_gate_tuning_max_delta_prob: float = 0.03
+    decision_gate_tuning_max_delta_conf: float = 0.03
+    decision_gate_tuning_max_delta_gap: float = 0.015
+    decision_gate_tuning_min_samples: int = 80
 
     api_football_key: str | None = None
     api_football_base_url: str = "https://v3.football.api-sports.io"
@@ -59,6 +105,14 @@ class Settings(BaseSettings):
     ratings_refresh_interval_seconds: int = 86400
     ratings_weekend_refresh_interval_seconds: int = 0
     ratings_path: str = "data/team_ratings.json"
+    team_aliases_path: str = "data/team_aliases.json"
+    team_aliases_enable_fuzzy: bool = True
+    team_aliases_fuzzy_cutoff: float = 0.86
+    form_refresh_enabled: bool = True
+    form_refresh_interval_seconds: int = 21600
+    form_weekend_refresh_interval_seconds: int = 7200
+    form_path: str = "data/team_form.json"
+    form_window_matches: int = 5
     historical_start_season: int = 2015
     historical_end_season: int = 2025
     local_data_dir: str = ".."

@@ -1,0 +1,12 @@
+{
+  "generated_at_utc": "2026-01-21T18:38:16.660122+00:00",
+  "generated_at_unix": 1769020696.658527,
+  "meta": {
+    "model": "alpha_inseason_v1",
+    "lookback_days": 60,
+    "per_league_limit": 600,
+    "min_samples": 40,
+    "market": "1x2"
+  },
+  "championships": {}
+}

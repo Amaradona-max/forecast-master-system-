@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "championships": {
+    "serie_a": {
+      "vocab": [
+        "Inter",
+        "Milan",
+        "Juventus",
+        "Roma",
+        "Lazio",
+        "Napoli",
+        "Atalanta"
+      ],
+      "aliases": {
+        "Internazionale": "Inter",
+        "FC Internazionale": "Inter",
+        "inter milano": "Inter",
+        "ac milan": "Milan",
+        "a c milan": "Milan",
+        "juventus fc": "Juventus"
+      }
+    },
+    "premier_league": {
+      "vocab": [
+        "Manchester City",
+        "Manchester United",
+        "Arsenal",
+        "Liverpool",
+        "Chelsea",
+        "Tottenham"
+      ],
+      "aliases": {
+        "Man City": "Manchester City",
+        "Manchester City FC": "Manchester City",
+        "Man United": "Manchester United",
+        "Manchester United FC": "Manchester United",
+        "Spurs": "Tottenham"
+      }
+    }
+  }
+}

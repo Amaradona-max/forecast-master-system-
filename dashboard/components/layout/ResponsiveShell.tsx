@@ -129,7 +129,7 @@ export function ResponsiveShell() {
               </span>
             </div>
             <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
-              La qualità sintetizza probabilità e confidence del modello: A/B sono le più affidabili.
+              Quality grade (A→D): sintetizza probabilità e confidence. A/B sono le più affidabili, D indica segnali deboli.
             </div>
           </div>
 
@@ -147,7 +147,7 @@ export function ResponsiveShell() {
               </span>
             </div>
             <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">
-              Il rischio aumenta quando segnali (probabilità/confidence) non sono allineati.
+              Risk (Basso/Medio/Alto): aumenta quando segnali (probabilità/confidence) non sono allineati.
             </div>
           </div>
 
@@ -176,6 +176,28 @@ export function ResponsiveShell() {
               <div>CONF: confidence alta.</div>
               <div>NO BET: segnali insufficienti o rischio troppo alto.</div>
               <div>+Xm / +Xh: inizio imminente.</div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+            <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Termini (Home)</div>
+            <div className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
+              <div>Confidence (HIGH/MEDIUM/LOW): livello di affidabilità stimato dal modello.</div>
+              <div>Kickoff: orario di inizio partita.</div>
+              <div>Bankroll: capitale di riferimento (slider). u = unità; es. 100u.</div>
+              <div>Stake: puntata consigliata in unità (u) e in percentuale del bankroll.</div>
+              <div>Educational only: modalità informativa (non è un invito a scommettere).</div>
+              <div>n/d: dato non disponibile.</div>
+              <div>1X2: mercato esito finale (1 = casa, X = pareggio, 2 = trasferta).</div>
+              <div>BTTS: Both Teams To Score (entrambe le squadre segnano).</div>
+              <div>Over 2.5: totale gol maggiore di 2.5.</div>
+              <div>W/D/L: forma recente (W vittoria, D pareggio, L sconfitta).</div>
+              <div>Track Record / Track: storico prestazioni del modello nel periodo selezionato.</div>
+              <div>Acc: accuracy (percentuale di pronostici corretti).</div>
+              <div>ROI (avg/tot): ritorno simulato medio/totale (metrica tecnica).</div>
+              <div>ROC-AUC: indicatore di separazione del modello (più alto = meglio).</div>
+              <div>N: numero di match usati nelle statistiche mostrate.</div>
+              <div>PIN: fissa un preferito in alto (max 3).</div>
             </div>
           </div>
         </div>
