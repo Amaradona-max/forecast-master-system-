@@ -19,6 +19,8 @@ import {
   updateUserProfile
 } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
+import { ChaosInsights } from "@/components/widgets/ChaosInsights"
+import { ChaosLeaderboard } from "@/components/widgets/ChaosLeaderboard"
 import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
@@ -407,6 +409,12 @@ export function StatisticalPredictionsDashboard() {
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
   const [onlyGood, setOnlyGood] = useState<boolean>(false)
   const [hideNoBet, setHideNoBet] = useState<boolean>(false)
+
+  const [focusMode, setFocusMode] = useState<boolean>(false)
+  const [focusIncludeNoBet, setFocusIncludeNoBet] = useState<boolean>(false)
+  const [focusChaosMax, setFocusChaosMax] = useState<number>(70)
+  const [focusQualityMin, setFocusQualityMin] = useState<"A" | "B" | "C">("B")
+
   const [performanceOpen, setPerformanceOpen] = useState<boolean>(false)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailMatch, setDetailMatch] = useState<(OverviewMatch & { p1: number; px: number; p2: number }) | null>(null)
@@ -440,6 +448,13 @@ export function StatisticalPredictionsDashboard() {
   const [multiMarketLoading, setMultiMarketLoading] = useState<boolean>(false)
   const [selectedMarketKey, setSelectedMarketKey] = useState<string>("")
   const openMatchExplainIdRef = useRef<string>("")
+
+  const [chaosExplainOpen, setChaosExplainOpen] = useState<boolean>(false)
+  const [chaosExplainMatchId, setChaosExplainMatchId] = useState<string>("")
+  const [chaosExplainTitle, setChaosExplainTitle] = useState<string>("")
+  const [chaosExplainFlags, setChaosExplainFlags] = useState<string[]>([])
+  const [chaosExplainIndex, setChaosExplainIndex] = useState<number | null>(null)
+  const [chaosExplainUpset, setChaosExplainUpset] = useState<boolean>(false)
 
   type WatchMatchLike = {
     home_team?: unknown
@@ -560,6 +575,37 @@ export function StatisticalPredictionsDashboard() {
     return { grade: "D" as const, score }
   }, [confValue])
 
+  const qualityLetter = useCallback(
+    (m: unknown): "A" | "B" | "C" => {
+      const obj = m as Record<string, unknown> | null | undefined
+      const raw0 = obj?.quality
+      if (typeof raw0 === "string") {
+        const q = raw0.toUpperCase()
+        if (q === "A" || q === "B" || q === "C") return q
+      }
+
+      const explain0 = obj?.explain
+      if (explain0 && typeof explain0 === "object") {
+        const raw1 = (explain0 as Record<string, unknown>)?.quality
+        if (typeof raw1 === "string") {
+          const q = raw1.toUpperCase()
+          if (q === "A" || q === "B" || q === "C") return q
+        }
+      }
+
+      const conf = Number(obj?.confidence ?? 0)
+      if (conf >= 0.75) return "A"
+      if (conf >= 0.6) return "B"
+      return "C"
+    },
+    []
+  )
+
+  const qualityAtLeast = (q: "A" | "B" | "C", min: "A" | "B" | "C") => {
+    const rank = { A: 3, B: 2, C: 1 } as const
+    return rank[q] >= rank[min]
+  }
+
   const riskLabel = (m: unknown) => {
     const p = clamp01(bestProb(m as OverviewMatch))
     const c = clamp01(confValue(m))
@@ -568,21 +614,24 @@ export function StatisticalPredictionsDashboard() {
     return { label: "Alto", tone: "red" as const }
   }
 
-  const leagueReliability = (championship: string) => {
-    const row0 = leagueMetrics?.[String(championship)]
-    if (!row0 || typeof row0 !== "object") return { label: "n/d", tone: "zinc" as const }
-    const row = row0 as Record<string, unknown>
+  const leagueReliability = useCallback(
+    (championship: string) => {
+      const row0 = leagueMetrics?.[String(championship)]
+      if (!row0 || typeof row0 !== "object") return { label: "n/d", tone: "zinc" as const }
+      const row = row0 as Record<string, unknown>
 
-    const ece = Number(row?.ece ?? 0)
-    const acc = Number(row?.accuracy ?? 0)
-    const n = Number(row?.n ?? 0)
+      const ece = Number(row?.ece ?? 0)
+      const acc = Number(row?.accuracy ?? 0)
+      const n = Number(row?.n ?? 0)
 
-    if (!Number.isFinite(n) || n < 80) return { label: "n/d", tone: "zinc" as const }
+      if (!Number.isFinite(n) || n < 80) return { label: "n/d", tone: "zinc" as const }
 
-    if (ece <= 0.06 && acc >= 0.5) return { label: "Affidabile", tone: "green" as const }
-    if (ece <= 0.09) return { label: "Medio", tone: "yellow" as const }
-    return { label: "Instabile", tone: "red" as const }
-  }
+      if (ece <= 0.06 && acc >= 0.5) return { label: "Affidabile", tone: "green" as const }
+      if (ece <= 0.09) return { label: "Medio", tone: "yellow" as const }
+      return { label: "Instabile", tone: "red" as const }
+    },
+    [leagueMetrics]
+  )
 
   const leagueTrend = (championship: string) => {
     if (!backtestTrends?.ok) return { label: "n/d", tone: "zinc" as const, title: "" }
@@ -617,6 +666,19 @@ export function StatisticalPredictionsDashboard() {
   }
 
   const isNoBet = useCallback((m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const explain0 = obj?.explain
+    if (explain0 && typeof explain0 === "object") {
+      const dg0 = (explain0 as Record<string, unknown>)?.decision_gate
+      if (dg0 && typeof dg0 === "object") {
+        const dg = dg0 as Record<string, unknown>
+        const r = String(dg?.recommendation ?? dg?.decision ?? "")
+        if (r.toUpperCase().includes("NO")) return true
+        if (dg?.allow === false) return true
+        if (dg?.allow === true) return false
+      }
+    }
+
     const q = qualityScore(m)
     const p = clamp01(bestProb(m as OverviewMatch))
     const c = clamp01(confValue(m))
@@ -718,14 +780,52 @@ export function StatisticalPredictionsDashboard() {
     return { label: "→", kind: "rel_mid" as const }
   }
 
+  const chaosBadge = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const explain0 = obj?.explain
+    if (!explain0 || typeof explain0 !== "object") return null
+    const chaos0 = (explain0 as Record<string, unknown>).chaos
+    if (!chaos0 || typeof chaos0 !== "object") return null
+    const chaos = chaos0 as Record<string, unknown>
+    const idx = Number(chaos.index ?? NaN)
+    if (!Number.isFinite(idx)) return null
+
+    const upset = Boolean(chaos.upset_watch)
+    const label = idx >= 85 ? "CHAOS🔥" : idx >= 70 ? "CHAOS↑" : idx >= 55 ? "CHAOS" : ""
+    if (!label && !upset) return null
+
+    const out: { label: string; kind: "chaos" | "upset" }[] = []
+    if (label) out.push({ label, kind: "chaos" })
+    if (upset) out.push({ label: "UPSET", kind: "upset" })
+    return out
+  }
+
+  const getChaosIndex = useCallback((m: unknown): number | null => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const explain0 = obj?.explain
+    if (!explain0 || typeof explain0 !== "object") return null
+    const chaos0 = (explain0 as Record<string, unknown>).chaos
+    if (!chaos0 || typeof chaos0 !== "object") return null
+    const chaos = chaos0 as Record<string, unknown>
+    const idx = Number(chaos.index ?? NaN)
+    return Number.isFinite(idx) ? idx : null
+  }, [])
+
   const badgeList = (m: unknown) => {
-    const badges: { label: string; kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" }[] = []
+    const badges: {
+      label: string
+      kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset"
+      tone?: "green" | "yellow" | "red" | "zinc" | "blue"
+    }[] = []
 
     const rb = reliabilityBadge(m)
     if (rb) badges.unshift(rb)
 
     const tb = trendBadge(m)
     if (tb) badges.unshift(tb)
+
+    const cb = chaosBadge(m)
+    if (cb) cb.forEach((x) => badges.unshift(x))
 
     const db = dayBadge(m)
     if (db) badges.unshift({ label: db, kind: "top" })
@@ -1076,6 +1176,33 @@ export function StatisticalPredictionsDashboard() {
     if (profile === "BALANCED" && base.length && filtered.length === 0) return base
     return filtered
   }, [profile, tenantMinConfidence, toPlay])
+
+  const visibleToPlayFiltered = useMemo(() => {
+    const src = Array.isArray(visibleToPlay) ? visibleToPlay : []
+    if (!focusMode) return src
+
+    return src.filter((m: unknown) => {
+      if (!focusIncludeNoBet && isNoBet(m)) return false
+
+      const c = getChaosIndex(m)
+      if (c !== null && c >= focusChaosMax) return false
+
+      const q = qualityLetter(m)
+      if (!qualityAtLeast(q, focusQualityMin)) return false
+
+      return true
+    })
+  }, [
+    focusChaosMax,
+    focusIncludeNoBet,
+    focusMode,
+    focusQualityMin,
+    getChaosIndex,
+    isNoBet,
+    qualityLetter,
+    visibleToPlay
+  ])
+
   const watchlistMatches = useMemo(() => {
     if (!watchlist.length) return []
     const map = new Map<string, OverviewMatch>()
@@ -1141,8 +1268,8 @@ export function StatisticalPredictionsDashboard() {
   }, [hideNoBet, isNoBet, onlyGood, qualityScore])
 
   const filteredBaseToPlay = useMemo(() => {
-    return visibleToPlay.filter(passesDecisionFilters)
-  }, [passesDecisionFilters, visibleToPlay])
+    return (focusMode ? visibleToPlayFiltered : visibleToPlay).filter(passesDecisionFilters)
+  }, [focusMode, passesDecisionFilters, visibleToPlay, visibleToPlayFiltered])
 
   const filteredToPlay = useMemo(() => {
     const q = String(deferredMatchQuery ?? "").trim().toLowerCase()
@@ -1764,6 +1891,10 @@ export function StatisticalPredictionsDashboard() {
                                       "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
                                       b.label === "NO BET"
                                         ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                                        : b.kind === "upset"
+                                        ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                                        : b.kind === "chaos"
+                                          ? pillClass((b.tone ?? "blue") as "green" | "yellow" | "red" | "zinc" | "blue")
                                         : b.kind === "rel_good"
                                         ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                                         : b.kind === "rel_mid"
@@ -1827,6 +1958,9 @@ export function StatisticalPredictionsDashboard() {
             </div>
           ) : null}
 
+          <ChaosLeaderboard matches={visibleToPlay} onOpenMatch={loadMatchDetails} />
+          <ChaosInsights matches={visibleToPlay} />
+
           <Card className="!bg-white/10 dark:!bg-zinc-950/25">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1834,8 +1968,85 @@ export function StatisticalPredictionsDashboard() {
                 <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Filtra per squadra e ordina al volo</div>
               </div>
               <div className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-                Gare: {filteredToPlay.length}/{matchesCount} · Media: {fmtPct(avgBest)}
+                {focusMode ? (
+                  <>
+                    Giocabili: {filteredBaseToPlay.length}/{visibleToPlay.length} · Media: {fmtPct(avgBest)}
+                  </>
+                ) : (
+                  <>
+                    Gare: {filteredToPlay.length}/{matchesCount} · Media: {fmtPct(avgBest)}
+                  </>
+                )}
               </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFocusMode((v) => !v)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                    focusMode
+                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                  }`}
+                  title="Mostra solo match giocabili (filtri intelligenti)"
+                >
+                  {focusMode ? "Focus Mode: ON" : "Focus Mode: OFF"}
+                </button>
+                <span className="text-xs text-zinc-600 dark:text-zinc-300">
+                  {focusMode ? `${visibleToPlayFiltered.length} match su ${visibleToPlay.length}` : `${visibleToPlay.length} match`}
+                </span>
+              </div>
+
+              {focusMode ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1 dark:bg-zinc-950/25">
+                    <span className="text-[10px] font-bold text-zinc-600 dark:text-zinc-300">Chaos max</span>
+                    {[55, 70, 85].map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setFocusChaosMax(v)}
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          focusChaosMax === v ? "bg-sky-500/20 text-sky-700 dark:text-sky-300" : "text-zinc-600 dark:text-zinc-300"
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1 dark:bg-zinc-950/25">
+                    <span className="text-[10px] font-bold text-zinc-600 dark:text-zinc-300">Quality</span>
+                    {(["A", "B", "C"] as const).map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => setFocusQualityMin(q)}
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          focusQualityMin === q ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" : "text-zinc-600 dark:text-zinc-300"
+                        }`}
+                      >
+                        ≥{q}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setFocusIncludeNoBet((v) => !v)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                      focusIncludeNoBet
+                        ? "border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                        : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                    }`}
+                    title="Se ON include anche i NO BET (sconsigliato se vuoi una lista giocabile)"
+                  >
+                    {focusIncludeNoBet ? "NO BET: inclusi" : "NO BET: esclusi"}
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -1863,32 +2074,36 @@ export function StatisticalPredictionsDashboard() {
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setOnlyGood((v) => !v)}
-                className={[
-                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                  onlyGood
-                    ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
-                ].join(" ")}
-                aria-pressed={onlyGood}
-              >
-                Solo Qualità A/B
-              </button>
-              <button
-                type="button"
-                onClick={() => setHideNoBet((v) => !v)}
-                className={[
-                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
-                  hideNoBet
-                    ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
-                ].join(" ")}
-                aria-pressed={hideNoBet}
-              >
-                {hideNoBet ? "Mostra NO BET" : "Nascondi NO BET"}
-              </button>
+              {!focusMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setOnlyGood((v) => !v)}
+                    className={[
+                      "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                      onlyGood
+                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                    ].join(" ")}
+                    aria-pressed={onlyGood}
+                  >
+                    Solo Qualità A/B
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHideNoBet((v) => !v)}
+                    className={[
+                      "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                      hideNoBet
+                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                    ].join(" ")}
+                    aria-pressed={hideNoBet}
+                  >
+                    {hideNoBet ? "Mostra NO BET" : "Nascondi NO BET"}
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setPerformanceOpen(true)}
@@ -2540,6 +2755,92 @@ export function StatisticalPredictionsDashboard() {
           </div>
         </Card>
       </div>
+
+      <Modal
+        open={chaosExplainOpen}
+        title={chaosExplainTitle || "Perché"}
+        onClose={() => {
+          setChaosExplainOpen(false)
+          setChaosExplainMatchId("")
+          setChaosExplainTitle("")
+          setChaosExplainIndex(null)
+          setChaosExplainUpset(false)
+          setChaosExplainFlags([])
+        }}
+      >
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Chaos</div>
+                <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                  Index {chaosExplainIndex !== null ? Math.round(chaosExplainIndex) : "n/d"}
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                {chaosExplainIndex !== null && chaosExplainIndex >= 55 ? (
+                  <span
+                    className={[
+                      "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                      chaosExplainIndex >= 85
+                        ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                        : chaosExplainIndex >= 70
+                          ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                          : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                    ].join(" ")}
+                  >
+                    {chaosExplainIndex >= 85 ? "CHAOS🔥" : chaosExplainIndex >= 70 ? "CHAOS↑" : "CHAOS"}
+                  </span>
+                ) : null}
+                {chaosExplainUpset ? (
+                  <span className="rounded-full border border-red-500/20 bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:text-red-300">
+                    UPSET
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-50">Perché (flags)</div>
+            <div className="mt-2 space-y-1">
+              {chaosExplainFlags.length ? chaosExplainFlags.map((f, i) => <div key={`cflag-${i}`}>• {f}</div>) : <div>n/d</div>}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            {matchExplainLoading || (chaosExplainMatchId && openMatchExplainId !== chaosExplainMatchId) ? (
+              <div>Caricamento…</div>
+            ) : matchExplainError ? (
+              <div>{matchExplainError}</div>
+            ) : !matchExplain ? (
+              <div>n/d</div>
+            ) : (
+              <div className="space-y-2">
+                <div className="font-semibold text-zinc-900 dark:text-zinc-50">
+                  {matchExplain.team ? `Perché ${matchExplain.team}` : "Perché"}
+                  {matchExplain.pick ? (
+                    <span className="ml-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{matchExplain.pick}</span>
+                  ) : null}
+                </div>
+                <div className="space-y-1">
+                  {(matchExplain.why ?? []).map((t, i) => (
+                    <div key={`m-why-${i}`}>• {t}</div>
+                  ))}
+                </div>
+                {(matchExplain.risks ?? []).length ? (
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Rischi</div>
+                    {(matchExplain.risks ?? []).map((t, i) => (
+                      <div key={`m-risk-${i}`}>• {t}</div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={performanceOpen}

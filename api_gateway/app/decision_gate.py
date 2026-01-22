@@ -14,7 +14,6 @@ class GateThresholds:
     min_conf: float = 0.55
     min_gap: float = 0.03
 
-    # per “top bet”
     top_best_prob: float = 0.70
     top_conf: float = 0.70
     top_gap: float = 0.08
@@ -25,7 +24,7 @@ def _clamp01(x: float) -> float:
         v = float(x)
     except Exception:
         return 0.0
-    if v != v:  # NaN
+    if v != v:
         return 0.0
     if v < 0.0:
         return 0.0
@@ -67,10 +66,8 @@ def select_thresholds(championship: str, cfg: dict[str, Any] | None) -> GateThre
     if isinstance(maybe, dict):
         cfg = maybe
 
-    # default
     base = dict(cfg.get("default") or {}) if isinstance(cfg.get("default"), dict) else {}
 
-    # override per league
     league = dict(cfg.get(str(championship)) or {}) if isinstance(cfg.get(str(championship)), dict) else {}
 
     def g(key: str, default: float) -> float:
@@ -88,6 +85,38 @@ def select_thresholds(championship: str, cfg: dict[str, Any] | None) -> GateThre
         top_conf=g("top_conf", 0.70),
         top_gap=g("top_gap", 0.08),
     )
+
+
+def adjust_thresholds_for_chaos(th: GateThresholds, chaos_index: float) -> tuple[GateThresholds, dict[str, Any] | None]:
+    try:
+        c = float(chaos_index)
+    except Exception:
+        return th, None
+
+    delta_prob = 0.0
+    delta_conf = 0.0
+    delta_gap = 0.0
+
+    if c >= 85:
+        delta_prob, delta_conf, delta_gap = 0.03, 0.03, 0.008
+    elif c >= 70:
+        delta_prob, delta_conf, delta_gap = 0.02, 0.02, 0.005
+    elif c >= 55:
+        delta_prob, delta_conf, delta_gap = 0.01, 0.01, 0.003
+    else:
+        return th, None
+
+    out = GateThresholds(
+        min_best_prob=min(0.70, th.min_best_prob + delta_prob),
+        min_conf=min(0.75, th.min_conf + delta_conf),
+        min_gap=min(0.08, th.min_gap + delta_gap),
+        top_best_prob=min(0.85, th.top_best_prob + 0.5 * delta_prob),
+        top_conf=min(0.85, th.top_conf + 0.5 * delta_conf),
+        top_gap=min(0.15, th.top_gap + 0.5 * delta_gap),
+    )
+
+    meta = {"chaos_index": c, "delta": {"prob": delta_prob, "conf": delta_conf, "gap": delta_gap}}
+    return out, meta
 
 
 def evaluate_decision(

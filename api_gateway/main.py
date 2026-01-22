@@ -29,6 +29,7 @@ from api_gateway.app.services import PredictionService
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState, LiveMatchState
 from api_gateway.app.team_form import rebuild_team_form_from_football_data
+from api_gateway.app.team_dynamics import rebuild_team_dynamics_to_file
 from api_gateway.app.ws import LiveUpdateEvent, WebSocketHub
 from api_gateway.app.routes.backtest_metrics import router as backtest_metrics_router
 from api_gateway.app.routes.backtest_trends import router as backtest_trends_router
@@ -329,6 +330,51 @@ async def _form_scheduler(provider: str) -> None:
 
         await asyncio.sleep(300)
 
+
+async def _team_dynamics_scheduler(provider: str) -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if provider != "football_data":
+            await asyncio.sleep(600)
+            continue
+
+        if not bool(getattr(settings, "team_dynamics_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        weekend_interval = float(getattr(settings, "team_dynamics_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "team_dynamics_refresh_interval_seconds", 21600) or 21600)
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_team_dynamics_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._team_dynamics_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                api_key = str(getattr(settings, "football_data_key", "") or "")
+                if api_key:
+                    rebuild_team_dynamics_to_file(
+                        championships=list(getattr(settings, "football_data_competition_codes", {}).keys()),
+                        competition_codes=dict(getattr(settings, "football_data_competition_codes", {}) or {}),
+                        api_base_url=str(getattr(settings, "football_data_base_url", "https://api.football-data.org/v4")),
+                        api_key=api_key,
+                        lookback_days=int(getattr(settings, "team_dynamics_lookback_days", 60)),
+                        per_league_limit=int(getattr(settings, "team_dynamics_per_league_limit", 1200)),
+                        out_path=str(getattr(settings, "team_dynamics_path", "data/team_dynamics.json")),
+                    )
+
+        await asyncio.sleep(300)
 
 async def _alpha_scheduler() -> None:
     import asyncio
@@ -812,6 +858,7 @@ async def startup() -> None:
     if provider == "football_data" and not os.getenv("VERCEL"):
         app.state.ratings_task = asyncio.create_task(_ratings_scheduler(provider))
         app.state.form_task = asyncio.create_task(_form_scheduler(provider))
+        app.state.team_dynamics_task = asyncio.create_task(_team_dynamics_scheduler(provider))
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.calibration_alpha_task = asyncio.create_task(_alpha_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
@@ -842,6 +889,11 @@ async def shutdown() -> None:
         with contextlib.suppress(Exception):
             await task
     task = getattr(app.state, "form_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "team_dynamics_task", None)
     if task is not None:
         task.cancel()
         with contextlib.suppress(Exception):

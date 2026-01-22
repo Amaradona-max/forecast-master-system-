@@ -14,7 +14,8 @@ from ml_engine.features.schema import FEATURE_VERSION
 from ml_engine.resilience.degradation import build_degradation
 from ml_engine.resilience.timeouts import time_left_ms
 from ml_engine.config import artifact_dir, cache_db_path
-from api_gateway.app.decision_gate import evaluate_decision, load_tuned_thresholds, select_thresholds
+from api_gateway.app.chaos_index import compute_chaos
+from api_gateway.app.decision_gate import adjust_thresholds_for_chaos, evaluate_decision, load_tuned_thresholds, select_thresholds
 from api_gateway.app.settings import settings
 from api_gateway.app.team_name_resolver import TeamNameResolver
 from api_gateway.app.team_name_resolver import canonicalize
@@ -38,6 +39,8 @@ class PredictionService:
         )
         self._decision_gate_tuned_cache: dict[str, Any] | None = None
         self._decision_gate_tuned_mtime_ns: int | None = None
+        self._team_dynamics_cache: dict[str, Any] | None = None
+        self._team_dynamics_mtime_ns: int | None = None
 
     def _calibrate_probs(self, probs: dict[str, float], alpha: float) -> dict[str, float]:
         try:
@@ -74,6 +77,15 @@ class PredictionService:
     def _load_team_form(self) -> dict[str, Any] | None:
         try:
             p = Path(str(getattr(settings, "form_path", "data/team_form.json")))
+            raw = p.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _load_team_dynamics(self) -> dict[str, Any] | None:
+        try:
+            p = Path(str(getattr(settings, "team_dynamics_path", "data/team_dynamics.json")))
             raw = p.read_text(encoding="utf-8")
             data = json.loads(raw)
             return data if isinstance(data, dict) else None
@@ -260,17 +272,32 @@ class PredictionService:
     ) -> PredictionResult:
         ctx = dict(context or {})
         ctx["real_data_only"] = settings.real_data_only
-        # Applica alpha per campionato (calibration in-season) se non fornito dal client
         self._apply_inseason_alpha(championship=str(championship), ctx=ctx)
         tl = time_left_ms()
         deadline_low = tl is not None and tl <= 150
         if tl is not None and tl <= 30:
             probs = {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
             explain = {"degradation_level": 3, "warnings": ["deadline_low"], "safe_mode": True, "safe_mode_reason": "deadline_low"}
+            explain["chaos"] = {"index": 0.0, "upset_watch": False, "flags": [], "inputs": {"available": False}}
             cfg = self._decision_gate_cfg()
             explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
-            th = select_thresholds(str(championship), cfg)
-            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=0.0, thresholds=th)
+            th0 = select_thresholds(str(championship), cfg)
+
+            chaos_index = None
+            if isinstance(explain.get("chaos"), dict):
+                try:
+                    chaos_index = float(explain["chaos"].get("index"))
+                except Exception:
+                    chaos_index = None
+
+            th = th0
+            adj = None
+            if isinstance(chaos_index, (int, float)):
+                th, adj = adjust_thresholds_for_chaos(th0, float(chaos_index))
+            if adj:
+                explain["decision_gate_adjustments"] = {"chaos": adj}
+
+            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=float(0.0), thresholds=th)
             return PredictionResult(probabilities=probs, explain=explain, confidence=0.0, ranges=None)
 
         rh = self._team_resolver.resolve(championship=str(championship), name=str(home_team))
@@ -352,10 +379,40 @@ class PredictionService:
             explain["warnings"] = list(deg.warnings)
             explain["cache"] = {"hit": True, "key": str(cache_key)}
             explain["team_name_resolution"] = team_name_resolution
+            chaos = compute_chaos(
+                team_dynamics_payload=self._load_team_dynamics(),
+                championship=str(championship),
+                home_team=str(home_team_n),
+                away_team=str(away_team_n),
+                kickoff_unix=float(kickoff_unix) if isinstance(kickoff_unix, (int, float)) else None,
+                best_prob=max(probs.values()) if isinstance(probs, dict) and probs else None,
+            )
+            if isinstance(chaos, dict):
+                explain["chaos"] = chaos
             cfg = self._decision_gate_cfg()
             explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
-            th = select_thresholds(str(championship), cfg)
-            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=float(conf0) if isinstance(conf0, (int, float)) else None, thresholds=th)
+            th0 = select_thresholds(str(championship), cfg)
+
+            chaos_index = None
+            if isinstance(explain.get("chaos"), dict):
+                try:
+                    chaos_index = float(explain["chaos"].get("index"))
+                except Exception:
+                    chaos_index = None
+
+            th = th0
+            adj = None
+            if isinstance(chaos_index, (int, float)):
+                th, adj = adjust_thresholds_for_chaos(th0, float(chaos_index))
+            if adj:
+                explain["decision_gate_adjustments"] = {"chaos": adj}
+
+            explain["decision_gate"] = evaluate_decision(
+                championship=str(championship),
+                probs=probs,
+                confidence=float(conf0 or 0.0),
+                thresholds=th,
+            )
             try:
                 data = self._load_backtest_metrics()
                 if isinstance(data, dict):
@@ -424,22 +481,44 @@ class PredictionService:
         explain["degradation_level"] = int(deg.level)
         explain["warnings"] = list(deg.warnings)
         explain["team_name_resolution"] = team_name_resolution
-        # Decision Gate (server-side): NO BET + best pick + qualità/rischio
+        chaos = compute_chaos(
+            team_dynamics_payload=self._load_team_dynamics(),
+            championship=str(championship),
+            home_team=str(home_team_n),
+            away_team=str(away_team_n),
+            kickoff_unix=float(kickoff_unix) if isinstance(kickoff_unix, (int, float)) else None,
+            best_prob=max(probs.values()) if isinstance(probs, dict) and probs else None,
+        )
+        if isinstance(chaos, dict):
+            explain["chaos"] = chaos
         if bool(getattr(settings, "decision_gate_enabled", True)):
             try:
                 cfg = self._decision_gate_cfg()
                 explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
-                th = select_thresholds(str(championship), cfg)
+                th0 = select_thresholds(str(championship), cfg)
+
+                chaos_index = None
+                if isinstance(explain.get("chaos"), dict):
+                    try:
+                        chaos_index = float(explain["chaos"].get("index"))
+                    except Exception:
+                        chaos_index = None
+
+                th = th0
+                adj = None
+                if isinstance(chaos_index, (int, float)):
+                    th, adj = adjust_thresholds_for_chaos(th0, float(chaos_index))
+                if adj:
+                    explain["decision_gate_adjustments"] = {"chaos": adj}
+
                 decision = evaluate_decision(
                     championship=str(championship),
                     probs=probs,
-                    confidence=float(conf) if isinstance(conf, (int, float)) else None,
+                    confidence=float(conf or 0.0),
                     thresholds=th,
                 )
-                # mettiamo tutto in explain così il frontend può usarlo senza cambiare schema response
                 explain["decision"] = decision
             except Exception:
-                # non deve mai rompere la prediction
                 pass
 
         try:

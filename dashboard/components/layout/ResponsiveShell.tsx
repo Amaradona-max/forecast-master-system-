@@ -169,6 +169,36 @@ export function ResponsiveShell() {
               <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-700 dark:text-zinc-200">
                 +30m
               </span>
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                AFFIDABILE
+              </span>
+              <span className="rounded-full border border-amber-500/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                MEDIO
+              </span>
+              <span className="rounded-full border border-rose-500/20 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+                INSTABILE
+              </span>
+              <span className="rounded-full border border-sky-500/20 bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:text-sky-300">
+                CHAOS
+              </span>
+              <span className="rounded-full border border-amber-500/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                CHAOS↑
+              </span>
+              <span className="rounded-full border border-red-500/20 bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:text-red-300">
+                CHAOS🔥
+              </span>
+              <span className="rounded-full border border-red-500/20 bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:text-red-300">
+                UPSET
+              </span>
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                ↑
+              </span>
+              <span className="rounded-full border border-amber-500/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                →
+              </span>
+              <span className="rounded-full border border-rose-500/20 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+                ↓
+              </span>
             </div>
             <div className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
               <div>LIVE: partita in corso.</div>
@@ -176,6 +206,10 @@ export function ResponsiveShell() {
               <div>CONF: confidence alta.</div>
               <div>NO BET: segnali insufficienti o rischio troppo alto.</div>
               <div>+Xm / +Xh: inizio imminente.</div>
+              <div>AFFIDABILE / MEDIO / INSTABILE: indicatore sintetico di affidabilità/stabilità del segnale.</div>
+              <div>↑ / → / ↓: trend recente dell’affidabilità.</div>
+              <div>CHAOS / CHAOS↑ / CHAOS🔥: volatilità del match (più alto = più imprevedibile).</div>
+              <div>UPSET: possibile sorpresa (attenzione al rischio).</div>
             </div>
           </div>
 
@@ -191,6 +225,7 @@ export function ResponsiveShell() {
               <div>1X2: mercato esito finale (1 = casa, X = pareggio, 2 = trasferta).</div>
               <div>BTTS: Both Teams To Score (entrambe le squadre segnano).</div>
               <div>Over 2.5: totale gol maggiore di 2.5.</div>
+              <div>Chaos index: indice (0–100) di volatilità del match.</div>
               <div>W/D/L: forma recente (W vittoria, D pareggio, L sconfitta).</div>
               <div>Track Record / Track: storico prestazioni del modello nel periodo selezionato.</div>
               <div>Acc: accuracy (percentuale di pronostici corretti).</div>
@@ -255,7 +290,8 @@ export function ResponsiveShell() {
           <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
             <div className="font-semibold text-zinc-900 dark:text-zinc-50">6) Legenda e lettura veloce</div>
             <div className="mt-1 space-y-1 text-zinc-600 dark:text-zinc-300">
-              <div>Apri “Legenda” per capire badge (LIVE, TOP, CONF, NO BET) e livelli.</div>
+              <div>Apri “Legenda” per capire badge (LIVE, TOP, CONF, NO BET, CHAOS, UPSET) e livelli.</div>
+              <div>Apri “Chaos Leaderboard” per vedere le 10 gare più imprevedibili e aprire il “Perché”.</div>
               <div>Qualità (A→D) riassume probabilità e confidence.</div>
               <div>Rischio (Basso/Medio/Alto) indica quanto è “solido” il segnale.</div>
             </div>

@@ -46,8 +46,6 @@ class Settings(BaseSettings):
     backtest_trends_min_samples_7d: int = 25
     backtest_trends_min_samples_30d: int = 60
     decision_gate_enabled: bool = True
-    # soglie personalizzabili: default + override per campionato
-    # outcome keys: home_win/draw/away_win
     decision_gate_thresholds: dict[str, dict[str, float]] = {
         "default": {
             "min_best_prob": 0.55,
@@ -57,7 +55,6 @@ class Settings(BaseSettings):
             "top_conf": 0.70,
             "top_gap": 0.08,
         },
-        # esempi (puoi ritoccarli dopo 2-3 giorni di utilizzo)
         "serie_a": {"min_gap": 0.03},
         "premier_league": {"min_best_prob": 0.56, "min_gap": 0.035},
         "la_liga": {"min_best_prob": 0.56},
@@ -127,6 +124,12 @@ class Settings(BaseSettings):
     form_weekend_refresh_interval_seconds: int = 7200
     form_path: str = "data/team_form.json"
     form_window_matches: int = 5
+    team_dynamics_enabled: bool = True
+    team_dynamics_path: str = "data/team_dynamics.json"
+    team_dynamics_refresh_interval_seconds: int = 21600  # 6 ore
+    team_dynamics_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
+    team_dynamics_lookback_days: int = 60
+    team_dynamics_per_league_limit: int = 1200
     historical_start_season: int = 2015
     historical_end_season: int = 2025
     local_data_dir: str = ".."
