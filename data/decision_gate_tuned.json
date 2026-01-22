@@ -1,10 +1,12 @@
 {
-  "generated_at_utc": "2026-01-21T20:00:17.797611+00:00",
-  "generated_at_unix": 1769025617.797747,
+  "generated_at_utc": "2026-01-22T18:29:30.357215+00:00",
+  "generated_at_unix": 1769106570.357365,
   "meta": {
-    "model": "decision_gate_tuning_v1",
+    "model": "decision_gate_tuning_v2_trend_aware",
     "source_metrics": "data/backtest_metrics.json",
+    "source_trends": "data/backtest_trends.json",
     "metrics_present": false,
+    "trends_present": false,
     "params": {
       "ece_good": 0.06,
       "ece_bad": 0.12,
@@ -13,7 +15,11 @@
       "max_delta_prob": 0.03,
       "max_delta_conf": 0.03,
       "max_delta_gap": 0.015,
-      "min_samples": 80
+      "min_samples": 80,
+      "trend_weight": 0.35,
+      "trend_extra_prob": 0.012,
+      "trend_extra_conf": 0.012,
+      "trend_extra_gap": 0.004
     }
   },
   "thresholds": {

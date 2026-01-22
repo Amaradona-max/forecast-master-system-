@@ -21,14 +21,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api_gateway.app.auto_refresh_orchestrator import AutoRefreshOrchestrator
 from api_gateway.app.backtest_metrics import rebuild_backtest_metrics_to_file
+from api_gateway.app.backtest_trends import rebuild_backtest_trends_to_file
 from api_gateway.app.calibration_alpha import rebuild_calibration_alpha
-from api_gateway.app.decision_gate_tuning import rebuild_decision_gate_tuned
+from api_gateway.app.decision_gate_tuning import TuneParams, rebuild_decision_gate_tuned
 from api_gateway.app.local_files import load_calendar_fixtures
 from api_gateway.app.services import PredictionService
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState, LiveMatchState
 from api_gateway.app.team_form import rebuild_team_form_from_football_data
 from api_gateway.app.ws import LiveUpdateEvent, WebSocketHub
+from api_gateway.app.routes.backtest_metrics import router as backtest_metrics_router
+from api_gateway.app.routes.backtest_trends import router as backtest_trends_router
 from api_gateway.middleware.rate_limit import rate_limit_middleware
 from api_gateway.middleware.request_limits import request_limits_middleware
 from api_gateway.routes import accuracy, history, insights, live, notifications, overview, predictions, system_admin
@@ -96,6 +99,8 @@ app.include_router(overview.router)
 app.include_router(insights.router)
 app.include_router(notifications.router)
 app.include_router(system_admin.router)
+app.include_router(backtest_metrics_router, prefix="/api")
+app.include_router(backtest_trends_router, prefix="/api")
 
 
 async def _run_cpu_with_deadline(fn, /, *args: Any, **kwargs: Any):
@@ -404,6 +409,47 @@ async def _backtest_metrics_scheduler() -> None:
         await asyncio.sleep(300)
 
 
+async def _backtest_trends_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "backtest_trends_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        weekend_interval = float(getattr(settings, "backtest_trends_weekend_refresh_interval_seconds", 0) or 0)
+        base_interval = float(getattr(settings, "backtest_trends_refresh_interval_seconds", 21600) or 21600)
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = base_interval
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_backtest_trends_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+
+        if (now0 - float(last)) >= float(interval):
+            app.state._backtest_trends_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_backtest_trends_to_file(
+                    db_path=str(getattr(settings, "state_db_path", "data/forecast_state.sqlite3")),
+                    out_path=str(getattr(settings, "backtest_trends_path", "data/backtest_trends.json")),
+                    market="1x2",
+                    ece_bins=int(getattr(settings, "backtest_trends_ece_bins", 10)),
+                    per_league_limit_7d=int(getattr(settings, "backtest_trends_per_league_limit_7d", 400)),
+                    per_league_limit_30d=int(getattr(settings, "backtest_trends_per_league_limit_30d", 800)),
+                    min_samples_7d=int(getattr(settings, "backtest_trends_min_samples_7d", 25)),
+                    min_samples_30d=int(getattr(settings, "backtest_trends_min_samples_30d", 60)),
+                )
+
+        await asyncio.sleep(300)
+
+
 async def _decision_gate_tuning_scheduler() -> None:
     import asyncio
     import contextlib
@@ -433,8 +479,23 @@ async def _decision_gate_tuning_scheduler() -> None:
             with contextlib.suppress(Exception):
                 rebuild_decision_gate_tuned(
                     backtest_metrics_path=str(getattr(settings, "backtest_metrics_path", "data/backtest_metrics.json")),
+                    backtest_trends_path=str(getattr(settings, "backtest_trends_path", "data/backtest_trends.json")),
                     base_thresholds=getattr(settings, "decision_gate_thresholds", {}) or {},
                     out_path=str(getattr(settings, "decision_gate_tuned_path", "data/decision_gate_tuned.json")),
+                    params=TuneParams(
+                        ece_good=float(getattr(settings, "decision_gate_tuning_ece_good", 0.06) or 0.06),
+                        ece_bad=float(getattr(settings, "decision_gate_tuning_ece_bad", 0.12) or 0.12),
+                        logloss_good=float(getattr(settings, "decision_gate_tuning_logloss_good", 0.98) or 0.98),
+                        logloss_bad=float(getattr(settings, "decision_gate_tuning_logloss_bad", 1.08) or 1.08),
+                        max_delta_prob=float(getattr(settings, "decision_gate_tuning_max_delta_prob", 0.03) or 0.03),
+                        max_delta_conf=float(getattr(settings, "decision_gate_tuning_max_delta_conf", 0.03) or 0.03),
+                        max_delta_gap=float(getattr(settings, "decision_gate_tuning_max_delta_gap", 0.015) or 0.015),
+                        min_samples=int(getattr(settings, "decision_gate_tuning_min_samples", 80) or 80),
+                        trend_weight=float(getattr(settings, "decision_gate_tuning_trend_weight", 0.35) or 0.35),
+                        trend_extra_prob=float(getattr(settings, "decision_gate_trend_extra_prob", 0.012) or 0.012),
+                        trend_extra_conf=float(getattr(settings, "decision_gate_trend_extra_conf", 0.012) or 0.012),
+                        trend_extra_gap=float(getattr(settings, "decision_gate_trend_extra_gap", 0.004) or 0.004),
+                    ),
                 )
 
         await asyncio.sleep(300)
@@ -756,6 +817,8 @@ async def startup() -> None:
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.backtest_metrics_task = asyncio.create_task(_backtest_metrics_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.backtest_trends_task = asyncio.create_task(_backtest_trends_scheduler())
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.decision_gate_tuning_task = asyncio.create_task(_decision_gate_tuning_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.notifications_task = asyncio.create_task(_notifications_scheduler(provider, app.state.app_state, app.state.ws_hub))
@@ -789,6 +852,11 @@ async def shutdown() -> None:
         with contextlib.suppress(Exception):
             await task
     task = getattr(app.state, "backtest_metrics_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "backtest_trends_task", None)
     if task is not None:
         task.cancel()
         with contextlib.suppress(Exception):

@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     backtest_metrics_min_samples: int = 60
     backtest_metrics_market: str = "1x2"
     backtest_metrics_ece_bins: int = 10
+    backtest_trends_enabled: bool = True
+    backtest_trends_path: str = "data/backtest_trends.json"
+    backtest_trends_refresh_interval_seconds: int = 21600  # 6 ore
+    backtest_trends_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
+    backtest_trends_market: str = "1x2"
+    backtest_trends_ece_bins: int = 10
+    backtest_trends_per_league_limit_7d: int = 400
+    backtest_trends_per_league_limit_30d: int = 800
+    backtest_trends_min_samples_7d: int = 25
+    backtest_trends_min_samples_30d: int = 60
     decision_gate_enabled: bool = True
     # soglie personalizzabili: default + override per campionato
     # outcome keys: home_win/draw/away_win
@@ -65,6 +75,10 @@ class Settings(BaseSettings):
     decision_gate_tuning_max_delta_conf: float = 0.03
     decision_gate_tuning_max_delta_gap: float = 0.015
     decision_gate_tuning_min_samples: int = 80
+    decision_gate_tuning_trend_weight: float = 0.35
+    decision_gate_trend_extra_prob: float = 0.012
+    decision_gate_trend_extra_conf: float = 0.012
+    decision_gate_trend_extra_gap: float = 0.004
 
     api_football_key: str | None = None
     api_football_base_url: str = "https://v3.football.api-sports.io"

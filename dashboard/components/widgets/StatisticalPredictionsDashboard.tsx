@@ -19,6 +19,7 @@ import {
   updateUserProfile
 } from "@/components/api/client"
 import { Card } from "@/components/widgets/Card"
+import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
 import { Modal } from "@/components/ui/Modal"
@@ -62,6 +63,22 @@ type ChampionshipOverview = {
 }
 
 type ChampionshipsOverviewResponse = { generated_at_utc: string; championships: ChampionshipOverview[] }
+
+type BacktestMetricsResponse = {
+  ok: boolean
+  error?: string
+  meta?: Record<string, unknown>
+  generated_at_unix?: number | null
+  championships: Record<string, Record<string, unknown>>
+}
+
+type BacktestTrendsResponse = {
+  ok: boolean
+  error?: string
+  meta?: Record<string, unknown>
+  generated_at_unix?: number | null
+  championships: Record<string, Record<string, unknown>>
+}
 
 const CHAMP_LABELS: Record<string, string> = {
   serie_a: "Serie A",
@@ -372,6 +389,10 @@ export function StatisticalPredictionsDashboard() {
   const [selectedChamp, setSelectedChamp] = useState<string>("serie_a")
   const [selectedMdKey, setSelectedMdKey] = useState<string>("")
   const [seasonAuc, setSeasonAuc] = useState<number | null>(null)
+  const [backtestMetrics, setBacktestMetrics] = useState<BacktestMetricsResponse | null>(null)
+  const [backtestTrends, setBacktestTrends] = useState<BacktestTrendsResponse | null>(null)
+  const [leagueMetrics, setLeagueMetrics] = useState<Record<string, unknown>>({})
+  const [leagueTrends, setLeagueTrends] = useState<Record<string, unknown>>({})
   const [teamsToPlay, setTeamsToPlay] = useState<TeamsToPlayResponse | null>(null)
   const [teamsToPlayError, setTeamsToPlayError] = useState<string | null>(null)
   const [trackDays, setTrackDays] = useState<number>(120)
@@ -386,6 +407,7 @@ export function StatisticalPredictionsDashboard() {
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
   const [onlyGood, setOnlyGood] = useState<boolean>(false)
   const [hideNoBet, setHideNoBet] = useState<boolean>(false)
+  const [performanceOpen, setPerformanceOpen] = useState<boolean>(false)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailMatch, setDetailMatch] = useState<(OverviewMatch & { p1: number; px: number; p2: number }) | null>(null)
   const [watchSearch, setWatchSearch] = useState<string>("")
@@ -546,6 +568,46 @@ export function StatisticalPredictionsDashboard() {
     return { label: "Alto", tone: "red" as const }
   }
 
+  const leagueReliability = (championship: string) => {
+    const row0 = leagueMetrics?.[String(championship)]
+    if (!row0 || typeof row0 !== "object") return { label: "n/d", tone: "zinc" as const }
+    const row = row0 as Record<string, unknown>
+
+    const ece = Number(row?.ece ?? 0)
+    const acc = Number(row?.accuracy ?? 0)
+    const n = Number(row?.n ?? 0)
+
+    if (!Number.isFinite(n) || n < 80) return { label: "n/d", tone: "zinc" as const }
+
+    if (ece <= 0.06 && acc >= 0.5) return { label: "Affidabile", tone: "green" as const }
+    if (ece <= 0.09) return { label: "Medio", tone: "yellow" as const }
+    return { label: "Instabile", tone: "red" as const }
+  }
+
+  const leagueTrend = (championship: string) => {
+    if (!backtestTrends?.ok) return { label: "n/d", tone: "zinc" as const, title: "" }
+    const row0 = leagueTrends?.[String(championship)]
+    if (!row0 || typeof row0 !== "object") return { label: "n/d", tone: "zinc" as const, title: "" }
+    const row = row0 as Record<string, unknown>
+    if (row.ok !== true) return { label: "n/d", tone: "zinc" as const, title: "" }
+
+    const dAcc = Number(row.delta_accuracy ?? NaN)
+    const dEce = Number(row.delta_ece ?? NaN)
+    if (!Number.isFinite(dAcc) || !Number.isFinite(dEce)) return { label: "n/d", tone: "zinc" as const, title: "" }
+
+    const epsAcc = 0.01
+    const epsEce = 0.005
+    const betterAcc = dAcc >= epsAcc
+    const worseAcc = dAcc <= -epsAcc
+    const betterEce = dEce <= -epsEce
+    const worseEce = dEce >= epsEce
+    const title = `7g vs 30g · ΔAcc ${(dAcc * 100).toFixed(1)}pp · ΔECE ${dEce.toFixed(3)}`
+
+    if (betterAcc && betterEce) return { label: "↑", tone: "green" as const, title }
+    if (worseAcc && worseEce) return { label: "↓", tone: "red" as const, title }
+    return { label: "→", tone: "zinc" as const, title }
+  }
+
   const noBetReason = (m: unknown) => {
     const p = clamp01(bestProb(m as OverviewMatch))
     const c = clamp01(confValue(m))
@@ -620,8 +682,50 @@ export function StatisticalPredictionsDashboard() {
     return `Consiglio: ${best.label} — Qualità ${q.grade}, Rischio ${r.label} (${gapTxt}).`
   }
 
+  const reliabilityBadge = (m: unknown) => {
+    const obj = m as { championship?: unknown; league?: unknown; competition?: unknown } | null | undefined
+    const champ = String(obj?.championship ?? obj?.league ?? obj?.competition ?? "").trim()
+    if (!champ) return null
+
+    const rel = leagueReliability(champ)
+    if (rel.label !== "n/d") {
+      if (rel.tone === "green") return { label: "AFFIDABILE", kind: "rel_good" as const }
+      if (rel.tone === "yellow") return { label: "MEDIO", kind: "rel_mid" as const }
+      if (rel.tone === "red") return { label: "INSTABILE", kind: "rel_bad" as const }
+    }
+
+    const row0 = backtestMetrics?.championships?.[champ]
+    if (!row0 || typeof row0 !== "object") return null
+    const row = row0 as Record<string, unknown>
+    const ece0 = Number(row.ece ?? row.expected_calibration_error ?? row.calibration_error ?? NaN)
+    const acc0 = Number(row.accuracy ?? row.acc ?? NaN)
+    if (!Number.isFinite(ece0) && !Number.isFinite(acc0)) return null
+    const ece = Number.isFinite(ece0) ? ece0 : 1
+    const acc = Number.isFinite(acc0) ? acc0 : 0
+    if (ece <= 0.07 && acc >= 0.56) return { label: "AFFIDABILE", kind: "rel_good" as const }
+    if (ece <= 0.10 && acc >= 0.52) return { label: "MEDIO", kind: "rel_mid" as const }
+    return { label: "INSTABILE", kind: "rel_bad" as const }
+  }
+
+  const trendBadge = (m: unknown) => {
+    const obj = m as { championship?: unknown; league?: unknown; competition?: unknown } | null | undefined
+    const champ = String(obj?.championship ?? obj?.league ?? obj?.competition ?? "").trim()
+    if (!champ) return null
+    const t = leagueTrend(champ)
+    if (t.label === "n/d") return null
+    if (t.label === "↑") return { label: "↑", kind: "rel_good" as const }
+    if (t.label === "↓") return { label: "↓", kind: "rel_bad" as const }
+    return { label: "→", kind: "rel_mid" as const }
+  }
+
   const badgeList = (m: unknown) => {
-    const badges: { label: string; kind: "live" | "top" | "conf" }[] = []
+    const badges: { label: string; kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" }[] = []
+
+    const rb = reliabilityBadge(m)
+    if (rb) badges.unshift(rb)
+
+    const tb = trendBadge(m)
+    if (tb) badges.unshift(tb)
 
     const db = dayBadge(m)
     if (db) badges.unshift({ label: db, kind: "top" })
@@ -835,6 +939,45 @@ export function StatisticalPredictionsDashboard() {
     }
     load()
     const t = window.setInterval(load, 30_000)
+    return () => {
+      active = false
+      window.clearInterval(t)
+    }
+  }, [pageVisible])
+
+  useEffect(() => {
+    let active = true
+    async function load() {
+      if (!pageVisible) return
+      try {
+        let res = await apiFetchTenant("/api/backtest-metrics", { cache: "no-store" })
+        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-metrics", { cache: "no-store" })
+        if (!res.ok) throw new Error(`backtest_metrics_failed:${res.status}`)
+        const json = (await res.json()) as BacktestMetricsResponse
+        if (!active) return
+        if (json?.ok && json?.championships) setLeagueMetrics(json.championships)
+        setBacktestMetrics(json?.ok ? json : null)
+      } catch {
+        if (!active) return
+        setBacktestMetrics(null)
+      }
+
+      try {
+        let res = await apiFetchTenant("/api/backtest-trends", { cache: "no-store" })
+        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-trends", { cache: "no-store" })
+        if (!res.ok) throw new Error(`backtest_trends_failed:${res.status}`)
+        const json = (await res.json()) as BacktestTrendsResponse
+        if (!active) return
+        if (json?.ok && json?.championships) setLeagueTrends(json.championships)
+        setBacktestTrends(json?.ok ? json : null)
+      } catch {
+        if (!active) return
+        setLeagueTrends({})
+        setBacktestTrends(null)
+      }
+    }
+    load()
+    const t = window.setInterval(load, 60_000)
     return () => {
       active = false
       window.clearInterval(t)
@@ -1621,6 +1764,12 @@ export function StatisticalPredictionsDashboard() {
                                       "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
                                       b.label === "NO BET"
                                         ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                                        : b.kind === "rel_good"
+                                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                                        : b.kind === "rel_mid"
+                                          ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                          : b.kind === "rel_bad"
+                                            ? "border-rose-500/20 bg-rose-500/15 text-rose-700 dark:text-rose-300"
                                         : b.kind === "live"
                                         ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
                                         : b.kind === "top"
@@ -1740,6 +1889,19 @@ export function StatisticalPredictionsDashboard() {
               >
                 {hideNoBet ? "Mostra NO BET" : "Nascondi NO BET"}
               </button>
+              <button
+                type="button"
+                onClick={() => setPerformanceOpen(true)}
+                className={[
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                  performanceOpen
+                    ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                ].join(" ")}
+                aria-pressed={performanceOpen}
+              >
+                Performance
+              </button>
             </div>
 
             <div className="mt-4 space-y-3">
@@ -1785,15 +1947,32 @@ export function StatisticalPredictionsDashboard() {
                       onToggleWatch={() => onToggleWatch(m)}
                       titleRight={
                         <div className="shrink-0 flex flex-col items-end gap-2 text-right">
-                          <span
-                            className={[
-                              "rounded-full border px-2 py-0.5 text-[10px] font-bold",
-                              pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
-                            ].join(" ")}
-                            title={[advice, bestPick ? `Pick: ${bestPick.label}` : ""].filter(Boolean).join(" ")}
-                          >
-                            {q.grade}
-                          </span>
+                          <div className="flex items-center justify-end gap-2">
+                            {(() => {
+                              const t = leagueTrend(String((m as { championship?: unknown } | null | undefined)?.championship ?? ""))
+                              if (t.label === "n/d") return null
+                              return (
+                                <span
+                                  className={[
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                                    pillClass(t.tone === "green" ? "green" : t.tone === "red" ? "red" : "zinc")
+                                  ].join(" ")}
+                                  title={t.title}
+                                >
+                                  {t.label}
+                                </span>
+                              )
+                            })()}
+                            <span
+                              className={[
+                                "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                                pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
+                              ].join(" ")}
+                              title={[advice, bestPick ? `Pick: ${bestPick.label}` : ""].filter(Boolean).join(" ")}
+                            >
+                              {q.grade}
+                            </span>
+                          </div>
                           <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
                             {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
                           </div>
@@ -1851,6 +2030,33 @@ export function StatisticalPredictionsDashboard() {
                         >
                           Rischio {r.label}
                         </span>
+                        {(() => {
+                          const t = leagueTrend(String((m as { championship?: unknown } | null | undefined)?.championship ?? ""))
+                          if (t.label === "n/d") return null
+                          return (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(
+                                t.tone === "green" ? "green" : t.tone === "red" ? "red" : "zinc"
+                              )}`}
+                              title={t.title}
+                            >
+                              {t.label}
+                            </span>
+                          )
+                        })()}
+                        {(() => {
+                          const rel = leagueReliability(String((m as { championship?: unknown } | null | undefined)?.championship ?? ""))
+                          if (rel.label === "n/d") return null
+                          return (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(
+                                rel.tone === "green" ? "green" : rel.tone === "yellow" ? "yellow" : "red"
+                              )}`}
+                            >
+                              {rel.label}
+                            </span>
+                          )
+                        })()}
                         {noBet ? (
                           <span className={["rounded-full border px-2 py-0.5 text-[10px] font-bold", pillClass("zinc")].join(" ")}>
                             NO BET
@@ -2072,6 +2278,8 @@ export function StatisticalPredictionsDashboard() {
               )}
             </div>
           </Card>
+
+          <LeaguePerformanceTable defaultOpen />
 
           <Card className="!bg-white/10 dark:!bg-zinc-950/25">
             <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Win Probability Chart</div>
@@ -2332,6 +2540,14 @@ export function StatisticalPredictionsDashboard() {
           </div>
         </Card>
       </div>
+
+      <Modal
+        open={performanceOpen}
+        title="Performance per campionato"
+        onClose={() => setPerformanceOpen(false)}
+      >
+        <LeaguePerformanceTable defaultOpen={true} />
+      </Modal>
 
       <Modal
         open={detailOpen}
