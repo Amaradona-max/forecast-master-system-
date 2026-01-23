@@ -22,6 +22,7 @@ import { Card } from "@/components/widgets/Card"
 import { ChaosInsights } from "@/components/widgets/ChaosInsights"
 import { ChaosLeaderboard } from "@/components/widgets/ChaosLeaderboard"
 import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
+import { PronosticiPicks } from "@/components/widgets/PronosticiPicks"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
 import { Modal } from "@/components/ui/Modal"
@@ -409,6 +410,7 @@ export function StatisticalPredictionsDashboard() {
   const [sortMode, setSortMode] = useState<"kickoff" | "prob" | "confidence">("prob")
   const [onlyGood, setOnlyGood] = useState<boolean>(false)
   const [hideNoBet, setHideNoBet] = useState<boolean>(false)
+  const [pronosticiView, setPronosticiView] = useState<"all" | "play" | "recover">("all")
 
   const [focusMode, setFocusMode] = useState<boolean>(false)
   const [focusIncludeNoBet, setFocusIncludeNoBet] = useState<boolean>(false)
@@ -811,11 +813,66 @@ export function StatisticalPredictionsDashboard() {
     return Number.isFinite(idx) ? idx : null
   }, [])
 
+  const territoryBadge = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const explain0 = obj?.explain
+    if (!explain0 || typeof explain0 !== "object") return null
+    const terr0 = (explain0 as Record<string, unknown>).territory
+    if (!terr0 || typeof terr0 !== "object") return null
+    const terr = terr0 as Record<string, unknown>
+    if (!terr.available) return null
+
+    const h0 = terr.home
+    const a0 = terr.away
+    const h = (h0 && typeof h0 === "object") ? (h0 as Record<string, unknown>) : null
+    const a = (a0 && typeof a0 === "object") ? (a0 as Record<string, unknown>) : null
+    const hOff = Number(h?.off_index ?? h?.tpx_off ?? NaN)
+    const hDef = Number(h?.def_index ?? h?.tpx_def ?? NaN)
+    const aOff = Number(a?.off_index ?? a?.tpx_off ?? NaN)
+    const aDef = Number(a?.def_index ?? a?.tpx_def ?? NaN)
+    if (!Number.isFinite(hOff) || !Number.isFinite(hDef) || !Number.isFinite(aOff) || !Number.isFinite(aDef)) return null
+
+    const adv = String(terr.advantage ?? "").toLowerCase()
+    const side = adv === "home" ? "Casa" : adv === "away" ? "Ospite" : "↔"
+    const tone: "green" | "red" | "zinc" = adv === "home" ? "green" : adv === "away" ? "red" : "zinc"
+    const label = adv === "home" ? `TPX: ${side} ${Math.round(hOff)}/${Math.round(hDef)}` : adv === "away" ? `TPX: ${side} ${Math.round(aOff)}/${Math.round(aDef)}` : "TPX: ↔"
+    const title = `Casa Off/Def ${Math.round(hOff)}/${Math.round(hDef)} · Ospite Off/Def ${Math.round(aOff)}/${Math.round(aDef)}`
+    return { label, tone, title }
+  }
+
+  const setpieceBadge = (m: unknown) => {
+    const obj = m as Record<string, unknown> | null | undefined
+    const explain0 = obj?.explain
+    if (!explain0 || typeof explain0 !== "object") return null
+    const sp0 = (explain0 as Record<string, unknown>).set_pieces
+    if (!sp0 || typeof sp0 !== "object") return null
+    const sp = sp0 as Record<string, unknown>
+    if (!sp.available) return null
+
+    const h0 = sp.home
+    const a0 = sp.away
+    const h = (h0 && typeof h0 === "object") ? (h0 as Record<string, unknown>) : null
+    const a = (a0 && typeof a0 === "object") ? (a0 as Record<string, unknown>) : null
+    const hOff = Number(h?.off_index ?? h?.spx_off ?? h?.off ?? NaN)
+    const hDef = Number(h?.def_index ?? h?.spx_def ?? h?.def ?? NaN)
+    const aOff = Number(a?.off_index ?? a?.spx_off ?? a?.off ?? NaN)
+    const aDef = Number(a?.def_index ?? a?.spx_def ?? a?.def ?? NaN)
+    if (!Number.isFinite(hOff) || !Number.isFinite(hDef) || !Number.isFinite(aOff) || !Number.isFinite(aDef)) return null
+
+    const mm = String(sp.mismatch ?? "").toLowerCase()
+    const side = mm === "home" ? "Casa" : mm === "away" ? "Ospite" : "↔"
+    const tone: "green" | "red" | "zinc" = mm === "home" ? "green" : mm === "away" ? "red" : "zinc"
+    const label = mm === "home" ? `SPX: ${side} ${Math.round(hOff)}/${Math.round(hDef)}` : mm === "away" ? `SPX: ${side} ${Math.round(aOff)}/${Math.round(aDef)}` : "SPX: ↔"
+    const title = `Casa Off/Def ${Math.round(hOff)}/${Math.round(hDef)} · Ospite Off/Def ${Math.round(aOff)}/${Math.round(aDef)}`
+    return { label, tone, title }
+  }
+
   const badgeList = (m: unknown) => {
     const badges: {
       label: string
-      kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset"
+      kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces"
       tone?: "green" | "yellow" | "red" | "zinc" | "blue"
+      title?: string
     }[] = []
 
     const rb = reliabilityBadge(m)
@@ -826,6 +883,12 @@ export function StatisticalPredictionsDashboard() {
 
     const cb = chaosBadge(m)
     if (cb) cb.forEach((x) => badges.unshift(x))
+
+    const terr = territoryBadge(m)
+    if (terr) badges.unshift({ label: terr.label, kind: "territory", tone: terr.tone, title: terr.title })
+
+    const spx = setpieceBadge(m)
+    if (spx) badges.unshift({ label: spx.label, kind: "set_pieces", tone: spx.tone, title: spx.title })
 
     const db = dayBadge(m)
     if (db) badges.unshift({ label: db, kind: "top" })
@@ -1395,6 +1458,44 @@ export function StatisticalPredictionsDashboard() {
     if (openMatchExplainId !== key) void loadMatchDetails(key)
   }
 
+  const matchById = useMemo(() => {
+    const map = new Map<string, OverviewMatch>()
+    for (const c of overview ?? []) {
+      for (const md of c?.matchdays ?? []) {
+        for (const m of md?.matches ?? []) {
+          const id = String(m?.match_id ?? "").trim()
+          if (id) map.set(id, m)
+        }
+      }
+    }
+    return map
+  }, [overview])
+
+  function openExplainModal(matchId: string) {
+    const key = String(matchId ?? "").trim()
+    if (!key) return
+
+    const m = matchById.get(key) ?? null
+    const title = m ? `${m.home_team ?? ""} – ${m.away_team ?? ""}` : "Perché"
+
+    const explain0 = (m?.explain ?? {}) as Record<string, unknown>
+    const chaos0 = explain0?.chaos
+    const chaos = chaos0 && typeof chaos0 === "object" ? (chaos0 as Record<string, unknown>) : null
+    const idx0 = Number(chaos?.index ?? NaN)
+    const idx = Number.isFinite(idx0) ? idx0 : null
+    const upset = Boolean(chaos?.upset_watch)
+    const flags = Array.isArray(chaos?.flags) ? (chaos?.flags as unknown[]).map((x) => String(x)) : []
+
+    setChaosExplainTitle(title)
+    setChaosExplainMatchId(key)
+    setChaosExplainIndex(idx)
+    setChaosExplainUpset(upset)
+    setChaosExplainFlags(flags)
+    setChaosExplainOpen(true)
+
+    void loadMatchDetails(key)
+  }
+
   const apiErrorLabel =
     error === "api_unreachable" || error === "api_disabled"
       ? "API non raggiungibile (backend offline)."
@@ -1887,6 +1988,7 @@ export function StatisticalPredictionsDashboard() {
                                 {badgeList(m).map((b) => (
                                   <span
                                     key={b.label}
+                                    title={b.title}
                                     className={[
                                       "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
                                       b.label === "NO BET"
@@ -1895,6 +1997,10 @@ export function StatisticalPredictionsDashboard() {
                                         ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
                                         : b.kind === "chaos"
                                           ? pillClass((b.tone ?? "blue") as "green" | "yellow" | "red" | "zinc" | "blue")
+                                        : b.kind === "territory"
+                                          ? pillClass((b.tone ?? "zinc") as "green" | "yellow" | "red" | "zinc" | "blue")
+                                        : b.kind === "set_pieces"
+                                          ? pillClass((b.tone ?? "zinc") as "green" | "yellow" | "red" | "zinc" | "blue")
                                         : b.kind === "rel_good"
                                         ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                                         : b.kind === "rel_mid"
@@ -1958,7 +2064,7 @@ export function StatisticalPredictionsDashboard() {
             </div>
           ) : null}
 
-          <ChaosLeaderboard matches={visibleToPlay} onOpenMatch={loadMatchDetails} />
+          <ChaosLeaderboard matches={visibleToPlay} onOpenMatch={openExplainModal} />
           <ChaosInsights matches={visibleToPlay} />
 
           <Card className="!bg-white/10 dark:!bg-zinc-950/25">
@@ -1997,6 +2103,46 @@ export function StatisticalPredictionsDashboard() {
                 <span className="text-xs text-zinc-600 dark:text-zinc-300">
                   {focusMode ? `${visibleToPlayFiltered.length} match su ${visibleToPlay.length}` : `${visibleToPlay.length} match`}
                 </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPronosticiView("all")}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                    pronosticiView === "all"
+                      ? "border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                  }`}
+                >
+                  Tutto
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPronosticiView("play")}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                    pronosticiView === "play"
+                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                  }`}
+                  title="2 gare per campionato con profilo prudente"
+                >
+                  Pronostici da giocare
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPronosticiView("recover")}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                    pronosticiView === "recover"
+                      ? "border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                  }`}
+                  title="2 gare per campionato: 1 low-risk + 1 high-risk (varianza/UPSET)"
+                >
+                  Pronostici per recuperare
+                </button>
               </div>
 
               {focusMode ? (
@@ -2119,6 +2265,25 @@ export function StatisticalPredictionsDashboard() {
               </button>
             </div>
 
+            {pronosticiView === "play" ? (
+              <PronosticiPicks
+                matches={toPlay}
+                mode="play"
+                champLabels={CHAMP_LABELS}
+                onOpenMatch={(id) => toggleExplainMatch(String(id))}
+              />
+            ) : null}
+
+            {pronosticiView === "recover" ? (
+              <PronosticiPicks
+                matches={toPlay}
+                mode="recover"
+                champLabels={CHAMP_LABELS}
+                onOpenMatch={(id) => toggleExplainMatch(String(id))}
+              />
+            ) : null}
+
+            {pronosticiView === "all" ? (
             <div className="mt-4 space-y-3">
               {nextMatches.length ? (
                 nextMatches.map((m) => {
@@ -2272,12 +2437,62 @@ export function StatisticalPredictionsDashboard() {
                             </span>
                           )
                         })()}
+                        {(() => {
+                          const terr = territoryBadge(m)
+                          if (!terr) return null
+                          return (
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(terr.tone)}`} title={terr.title}>
+                              {terr.label}
+                            </span>
+                          )
+                        })()}
+                        {(() => {
+                          const spx = setpieceBadge(m)
+                          if (!spx) return null
+                          return (
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(spx.tone)}`} title={spx.title}>
+                              {spx.label}
+                            </span>
+                          )
+                        })()}
                         {noBet ? (
                           <span className={["rounded-full border px-2 py-0.5 text-[10px] font-bold", pillClass("zinc")].join(" ")}>
                             NO BET
                           </span>
                         ) : null}
                       </div>
+                      {(() => {
+                        const obj = m as { explain?: unknown } | null | undefined
+                        const explain0 = obj?.explain
+                        if (!explain0 || typeof explain0 !== "object") return null
+                        const sp0 = (explain0 as Record<string, unknown>).set_pieces
+                        if (!sp0 || typeof sp0 !== "object") return null
+                        const sp = sp0 as Record<string, unknown>
+
+                        if ("available" in sp && !Boolean(sp.available)) return null
+
+                        const hOff = Number(sp.home_off ?? NaN)
+                        const hDef = Number(sp.home_def ?? NaN)
+                        const aOff = Number(sp.away_off ?? NaN)
+                        const aDef = Number(sp.away_def ?? NaN)
+                        if (![hOff, hDef, aOff, aDef].every((n) => Number.isFinite(n))) return null
+
+                        return (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <span className="rounded-full border border-sky-500/20 bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:text-sky-300">
+                              SPX H: {hOff.toFixed(0)}/{hDef.toFixed(0)}
+                            </span>
+                            <span className="rounded-full border border-sky-500/20 bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:text-sky-300">
+                              SPX A: {aOff.toFixed(0)}/{aDef.toFixed(0)}
+                            </span>
+                            {Boolean(sp.mismatch) ? (
+                              <span className="rounded-full border border-amber-500/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                                Set-piece mismatch
+                              </span>
+                            ) : null}
+                          </div>
+                        )
+                      })()}
                       <div className="mt-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-zinc-900 dark:bg-zinc-950/20 dark:text-zinc-50">
                         {advice}
                       </div>
@@ -2492,6 +2707,7 @@ export function StatisticalPredictionsDashboard() {
                 </div>
               )}
             </div>
+            ) : null}
           </Card>
 
           <LeaguePerformanceTable defaultOpen />

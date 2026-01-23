@@ -1,0 +1,34 @@
+{
+  "generated_at_unix": 1769195175.2162611,
+  "generated_at_utc": "2026-01-23T19:06:15.216261+00:00",
+  "meta": {
+    "model": "team_setpiece_index_v1",
+    "provider": "mock_test",
+    "lookback_days": 90,
+    "min_matches": 1
+  },
+  "championships": {
+    "serie_a": {
+      "asof_unix": 1769195175.2162611,
+      "n_matches_used": 2,
+      "teams": {
+        "Milan": {
+          "off_index": 0.0,
+          "def_index": 0.0,
+          "n_used": 2,
+          "last_kickoff_unix": 1769108775.2162309,
+          "off_raw_avg": 9.1,
+          "conceded_raw_avg": 12.8
+        },
+        "Inter": {
+          "off_index": 100.0,
+          "def_index": 100.0,
+          "n_used": 2,
+          "last_kickoff_unix": 1769108775.2162309,
+          "off_raw_avg": 12.8,
+          "conceded_raw_avg": 9.1
+        }
+      }
+    }
+  }
+}

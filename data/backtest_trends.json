@@ -1,0 +1,14 @@
+{
+  "generated_at_utc": "2026-01-23T19:27:40.295869+00:00",
+  "generated_at_unix": 1769196460.295883,
+  "meta": {
+    "model": "backtest_trends_7v30_v1",
+    "market": "1x2",
+    "ece_bins": 10,
+    "per_league_limit_7d": 400,
+    "per_league_limit_30d": 800,
+    "min_samples_7d": 25,
+    "min_samples_30d": 60
+  },
+  "championships": {}
+}

@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     team_dynamics_weekend_refresh_interval_seconds: int = 7200  # 2 ore sab/dom
     team_dynamics_lookback_days: int = 60
     team_dynamics_per_league_limit: int = 1200
+    # --- Advanced ("inusual") stats: Territorial Pressure Index (TPX) ---
+    territory_index_path: str = "data/team_territory_index.json"
+    territory_refresh_interval_seconds: int = 60 * 60 * 24  # daily
+    territory_lookback_days: int = 120
+    territory_min_matches: int = 6
+    # --- Set Pieces (SPX) ---
+    setpiece_index_path: str = "data/team_setpiece_index.json"
+    setpiece_refresh_interval_seconds: int = 60 * 60 * 24  # daily
+    setpiece_lookback_days: int = 120
+    setpiece_min_matches: int = 6
     historical_start_season: int = 2015
     historical_end_season: int = 2025
     local_data_dir: str = ".."

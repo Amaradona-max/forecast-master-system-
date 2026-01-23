@@ -4,8 +4,9 @@ import React from "react"
 
 type Badge = {
   label: string
-  kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset"
+  kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces"
   tone?: "green" | "yellow" | "red" | "zinc" | "blue"
+  title?: string
 }
 
 type WatchlistMatch = { home_team: string; away_team: string } & Record<string, unknown>
@@ -46,12 +47,25 @@ export const WatchlistItem = React.memo(function WatchlistItem({
           {badges.map((b) => (
             <span
               key={b.label}
+              title={b.title}
               className={[
                 "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
                 b.label === "NO BET"
                   ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
                   : b.kind === "upset"
                     ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+                  : b.kind === "territory"
+                    ? b.tone === "green"
+                      ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : b.tone === "red"
+                        ? "border-rose-500/20 bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                        : "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                  : b.kind === "set_pieces"
+                    ? b.tone === "green"
+                      ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : b.tone === "red"
+                        ? "border-rose-500/20 bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                        : "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
                   : b.kind === "chaos"
                     ? b.tone === "red"
                       ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"

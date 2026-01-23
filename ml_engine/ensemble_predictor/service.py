@@ -13,6 +13,8 @@ from ml_engine.poisson_goal_model import match_probabilities
 from ml_engine.performance_targets import CHAMPIONSHIP_TARGETS
 from ml_engine.safety.safe_mode import get_safe_mode
 from ml_engine.team_ratings_store import get_team_strength
+from ml_engine.team_setpiece_store import get_team_setpieces
+from ml_engine.team_territory_store import get_team_territory
 from ml_engine.config import monitoring_dir
 
 
@@ -142,6 +144,71 @@ class EnsemblePredictorService:
             p_away = (1.0 - shrink) * p_away + shrink * u
             p_home, p_draw, p_away = _normalize3(p_home, p_draw, p_away)
 
+        territory_explain: dict[str, Any] | None = None
+        home_tpx = get_team_territory(championship=championship, team=home_team)
+        away_tpx = get_team_territory(championship=championship, team=away_team)
+        if home_tpx is not None and away_tpx is not None and status != "LIVE":
+            home_edge = (float(home_tpx.off_index) - float(away_tpx.def_index)) / 100.0
+            away_edge = (float(away_tpx.off_index) - float(home_tpx.def_index)) / 100.0
+            net = float(home_edge - away_edge)
+            factor = 0.01 if not bool(safe.enabled) else 0.006
+            raw_shift = _clamp(net * factor, -0.02, 0.02)
+            floor = 0.02
+            shift = raw_shift
+            if shift > 0:
+                shift = min(float(shift), float(p_away) - floor)
+            elif shift < 0:
+                shift = max(float(shift), floor - float(p_home))
+            p_home = float(p_home) + float(shift)
+            p_away = float(p_away) - float(shift)
+            p_home, p_draw, p_away = _normalize3(float(p_home), float(p_draw), float(p_away))
+
+            advantage = "none"
+            if abs(net) >= 0.12:
+                advantage = "home" if net > 0 else "away"
+            territory_explain = {
+                "available": True,
+                "advantage": advantage,
+                "home": {"off_index": float(home_tpx.off_index), "def_index": float(home_tpx.def_index)},
+                "away": {"off_index": float(away_tpx.off_index), "def_index": float(away_tpx.def_index)},
+                "edges": {"home_vs_away_def": float(home_edge), "away_vs_home_def": float(away_edge), "net": float(net)},
+                "shift_applied": float(shift),
+            }
+        else:
+            territory_explain = {"available": False}
+
+        setpiece_explain: dict[str, Any] | None = None
+        sp_home = get_team_setpieces(championship=championship, team=home_team)
+        sp_away = get_team_setpieces(championship=championship, team=away_team)
+        if sp_home is not None and sp_away is not None and status != "LIVE":
+            home_edge = (float(sp_home.off_index) - float(sp_away.def_index)) / 100.0
+            away_edge = (float(sp_away.off_index) - float(sp_home.def_index)) / 100.0
+            delta0 = float(home_edge - away_edge)
+
+            max_shift = 0.03
+            delta = _clamp(float(delta0) * 0.02, -float(max_shift), float(max_shift))
+
+            probs2 = _shift_home_away({"home_win": float(p_home), "draw": float(p_draw), "away_win": float(p_away)}, delta)
+            p_home = float(probs2.get("home_win", 0.0) or 0.0)
+            p_draw = float(probs2.get("draw", 0.0) or 0.0)
+            p_away = float(probs2.get("away_win", 0.0) or 0.0)
+
+            setpiece_explain = {
+                "available": True,
+                "home_off": float(sp_home.off_index),
+                "home_def": float(sp_home.def_index),
+                "away_off": float(sp_away.off_index),
+                "away_def": float(sp_away.def_index),
+                "home_edge": round(float(home_edge), 4),
+                "away_edge": round(float(away_edge), 4),
+                "delta_applied": round(float(delta), 4),
+                "mismatch": bool(abs(float(home_edge - away_edge)) >= 0.25),
+                "home": {"off_index": float(sp_home.off_index), "def_index": float(sp_home.def_index)},
+                "away": {"off_index": float(sp_away.off_index), "def_index": float(sp_away.def_index)},
+            }
+        else:
+            setpiece_explain = {"available": False}
+
         p_home, p_draw, p_away = _apply_guardrails(p_home, p_draw, p_away)
 
         var_ensemble = _ensemble_variance(base=base_comp, poisson=poi_comp, dixon_coles=dc_comp, logit=logit_comp)
@@ -211,6 +278,10 @@ class EnsemblePredictorService:
             "confidence": {"score": float(confidence_score), "label": str(confidence_label)},
             "ranges": ranges,
         }
+        if isinstance(territory_explain, dict):
+            explain["territory"] = territory_explain
+        if isinstance(setpiece_explain, dict):
+            explain["set_pieces"] = setpiece_explain
         if home_lookup is not None or away_lookup is not None:
             meta0: dict[str, Any] = {}
             if home_lookup is not None:
@@ -218,6 +289,20 @@ class EnsemblePredictorService:
             elif away_lookup is not None:
                 meta0.update(dict(away_lookup.meta))
             explain["ratings"] = meta0
+        if home_tpx is not None or away_tpx is not None:
+            meta1: dict[str, Any] = {}
+            if home_tpx is not None:
+                meta1.update(dict(home_tpx.meta))
+            elif away_tpx is not None:
+                meta1.update(dict(away_tpx.meta))
+            explain["territory_meta"] = meta1
+        if sp_home is not None or sp_away is not None:
+            meta2: dict[str, Any] = {}
+            if sp_home is not None:
+                meta2.update(dict(sp_home.meta))
+            elif sp_away is not None:
+                meta2.update(dict(sp_away.meta))
+            explain["setpiece_meta"] = meta2
 
         return {
             "probabilities": {"home_win": p_home, "draw": p_draw, "away_win": p_away},
@@ -284,6 +369,27 @@ def _apply_guardrails(p_home: float, p_draw: float, p_away: float) -> tuple[floa
     p_away = _clamp(p_away, 0.03, 0.90)
     p_home, p_draw, p_away = _normalize3(p_home, p_draw, p_away)
     return p_home, p_draw, p_away
+
+
+def _shift_home_away(probs: dict[str, float], delta: float) -> dict[str, float]:
+    try:
+        p_home = float(probs.get("home_win", 0.0) or 0.0)
+        p_draw = float(probs.get("draw", 0.0) or 0.0)
+        p_away = float(probs.get("away_win", 0.0) or 0.0)
+    except Exception:
+        return {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
+
+    floor = 0.02
+    shift = float(delta)
+    if shift > 0:
+        shift = min(float(shift), float(p_away) - float(floor))
+    elif shift < 0:
+        shift = max(float(shift), float(floor) - float(p_home))
+
+    p_home = float(p_home) + float(shift)
+    p_away = float(p_away) - float(shift)
+    p_home, p_draw, p_away = _normalize3(float(p_home), float(p_draw), float(p_away))
+    return {"home_win": float(p_home), "draw": float(p_draw), "away_win": float(p_away)}
 
 
 def _margin(probs: dict[str, float]) -> float:

@@ -33,6 +33,9 @@ export function ResponsiveShell() {
 
   return (
     <div className="flex min-h-screen bg-zinc-50 dark:bg-zinc-950">
+      <div className="fixed right-3 top-3 z-[60] md:right-6 md:top-4">
+        <ThemeToggle />
+      </div>
       <aside
         className={`hidden md:flex flex-col border-r border-white/10 bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md transition-all ${
           collapsed ? "w-[72px]" : "w-64"
@@ -100,10 +103,6 @@ export function ResponsiveShell() {
             {collapsed ? "?" : "Come usare l'App"}
           </button>
         </nav>
-
-        <div className="px-4 py-3">
-          <ThemeToggle />
-        </div>
       </aside>
 
       <main className="flex-1 px-4 py-4 md:px-6 md:py-6">

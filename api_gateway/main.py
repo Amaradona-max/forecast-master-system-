@@ -30,6 +30,19 @@ from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState, LiveMatchState
 from api_gateway.app.team_form import rebuild_team_form_from_football_data
 from api_gateway.app.team_dynamics import rebuild_team_dynamics_to_file
+from api_gateway.app.territory_index import (
+    build_team_tpx_index,
+    build_team_territory_index_payload,
+    parse_api_football_stats_row,
+    write_territory_index_file,
+)
+from api_gateway.app.setpiece_index import (
+    api_football_fetch_fixture_statistics,
+    build_team_spx_index,
+    build_team_setpiece_index_payload,
+    parse_api_football_setpiece_row,
+    write_setpiece_index_file,
+)
 from api_gateway.app.ws import LiveUpdateEvent, WebSocketHub
 from api_gateway.app.routes.backtest_metrics import router as backtest_metrics_router
 from api_gateway.app.routes.backtest_trends import router as backtest_trends_router
@@ -375,6 +388,372 @@ async def _team_dynamics_scheduler(provider: str) -> None:
                     )
 
         await asyncio.sleep(300)
+
+
+async def _rebuild_team_territory_index_from_api_football(*, state: AppState) -> dict[str, Any] | None:
+    api_key = str(getattr(settings, "api_football_key", "") or "").strip()
+    if not api_key:
+        return None
+    leagues = getattr(settings, "api_football_league_ids", {})
+    seasons = getattr(settings, "api_football_season_years", {})
+    if not isinstance(leagues, dict) or not leagues:
+        return None
+    if not isinstance(seasons, dict) or not seasons:
+        return None
+
+    lookback_days = int(getattr(settings, "territory_lookback_days", 120) or 120)
+    if lookback_days < 14:
+        lookback_days = 14
+    min_matches = int(getattr(settings, "territory_min_matches", 6) or 6)
+    if min_matches < 3:
+        min_matches = 3
+
+    now0 = time.time()
+    date_to = datetime.fromtimestamp(now0, tz=timezone.utc).date()
+    date_from = date_to - timedelta(days=int(lookback_days))
+    from_day = date_from.isoformat()
+    to_day = date_to.isoformat()
+
+    headers = {"x-apisports-key": api_key}
+    base = str(getattr(settings, "api_football_base_url", "https://v3.football.api-sports.io") or "https://v3.football.api-sports.io")
+    fixtures_ttl = float(getattr(settings, "fixtures_season_cache_ttl_seconds", 43200) or 43200)
+    stats_ttl = 86400.0 * 7.0
+
+    rows = []
+    for champ, league_id in leagues.items():
+        try:
+            lid = int(league_id)
+        except Exception:
+            continue
+        season = seasons.get(champ)
+        try:
+            season_i = int(season) if season is not None else 0
+        except Exception:
+            season_i = 0
+        if season_i <= 0:
+            continue
+
+        qs = urlencode({"league": lid, "season": season_i, "timezone": "UTC", "from": from_day, "to": to_day})
+        url = f"{base.rstrip('/')}/fixtures?{qs}"
+        cache_key = f"af_fixtures:territory:{lid}:{season_i}:{from_day}:{to_day}"
+
+        payload = await state.get_cache_json(cache_key)
+        if payload is None:
+            try:
+                payload = _http_get_json(url, headers=headers)
+                await state.set_cache_json(cache_key, payload, fixtures_ttl)
+            except Exception:
+                payload = None
+
+        items = payload.get("response") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            continue
+
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fixture = it.get("fixture") if isinstance(it.get("fixture"), dict) else {}
+            status = fixture.get("status") if isinstance(fixture.get("status"), dict) else {}
+            short = str(status.get("short") or "").upper()
+            if short not in {"FT", "AET", "PEN"}:
+                continue
+            fixture_id = fixture.get("id")
+            if not isinstance(fixture_id, (int, float)):
+                continue
+            fid = int(fixture_id)
+            stats_cache_key = f"af_fixture_stats:{fid}"
+            stats_payload = await state.get_cache_json(stats_cache_key)
+            if stats_payload is None:
+                url2 = f"{base.rstrip('/')}/fixtures/statistics?{urlencode({'fixture': fid})}"
+                try:
+                    stats_payload = _http_get_json(url2, headers=headers)
+                    await state.set_cache_json(stats_cache_key, stats_payload, stats_ttl)
+                except Exception:
+                    stats_payload = None
+            if stats_payload is None:
+                continue
+            row = parse_api_football_stats_row(fixture_item=it, stats_payload=stats_payload, championship=str(champ))
+            if row is None:
+                continue
+            rows.append(row)
+
+    payload_out = build_team_territory_index_payload(rows=rows, lookback_days=lookback_days, min_matches=min_matches, provider="api_football")
+    out_path = str(getattr(settings, "territory_index_path", "data/team_territory_index.json") or "data/team_territory_index.json")
+    write_territory_index_file(path=out_path, payload=payload_out)
+    return payload_out
+
+
+async def _territory_scheduler(provider: str, state: AppState) -> None:
+    while True:
+        now0 = time.time()
+        if provider != "api_football":
+            await asyncio.sleep(600)
+            continue
+        if not bool(getattr(settings, "api_football_key", None)):
+            await asyncio.sleep(600)
+            continue
+        interval = float(getattr(settings, "territory_refresh_interval_seconds", 86400) or 86400)
+        if interval < 1800:
+            interval = 1800.0
+        last = getattr(app.state, "_territory_refresh_last_unix", 0.0)
+        if not isinstance(last, (int, float)):
+            last = 0.0
+        if (now0 - float(last)) >= float(interval):
+            app.state._territory_refresh_last_unix = float(now0)
+            with contextlib.suppress(Exception):
+                await _rebuild_team_territory_index_from_api_football(state=state)
+        await asyncio.sleep(300)
+
+
+async def _rebuild_team_setpiece_index_from_api_football(*, state: AppState) -> dict[str, Any] | None:
+    api_key = str(getattr(settings, "api_football_key", "") or "").strip()
+    if not api_key:
+        return None
+    leagues = getattr(settings, "api_football_league_ids", {})
+    seasons = getattr(settings, "api_football_season_years", {})
+    if not isinstance(leagues, dict) or not leagues:
+        return None
+    if not isinstance(seasons, dict) or not seasons:
+        return None
+
+    lookback_days = int(getattr(settings, "setpiece_lookback_days", 120) or 120)
+    if lookback_days < 14:
+        lookback_days = 14
+    min_matches = int(getattr(settings, "setpiece_min_matches", 6) or 6)
+    if min_matches < 3:
+        min_matches = 3
+
+    now0 = time.time()
+    date_to = datetime.fromtimestamp(now0, tz=timezone.utc).date()
+    date_from = date_to - timedelta(days=int(lookback_days))
+    from_day = date_from.isoformat()
+    to_day = date_to.isoformat()
+
+    headers = {"x-apisports-key": api_key}
+    base = str(getattr(settings, "api_football_base_url", "https://v3.football.api-sports.io") or "https://v3.football.api-sports.io")
+    fixtures_ttl = float(getattr(settings, "fixtures_season_cache_ttl_seconds", 43200) or 43200)
+
+    champs_out: dict[str, Any] = {}
+    for champ, league_id in leagues.items():
+        try:
+            lid = int(league_id)
+        except Exception:
+            continue
+        season = seasons.get(champ)
+        try:
+            season_i = int(season) if season is not None else 0
+        except Exception:
+            season_i = 0
+        if season_i <= 0:
+            continue
+
+        qs = urlencode({"league": lid, "season": season_i, "timezone": "UTC", "from": from_day, "to": to_day})
+        url = f"{base.rstrip('/')}/fixtures?{qs}"
+        cache_key = f"af_fixtures:setpiece:{lid}:{season_i}:{from_day}:{to_day}"
+
+        payload = await state.get_cache_json(cache_key)
+        if payload is None:
+            try:
+                payload = _http_get_json(url, headers=headers)
+                await state.set_cache_json(cache_key, payload, fixtures_ttl)
+            except Exception:
+                payload = None
+
+        items = payload.get("response") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            continue
+
+        fixtures: list[dict[str, Any]] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fixture = it.get("fixture") if isinstance(it.get("fixture"), dict) else {}
+            status = fixture.get("status") if isinstance(fixture.get("status"), dict) else {}
+            short = str(status.get("short") or "").upper()
+            if short not in {"FT", "AET", "PEN"}:
+                continue
+            fixture_id = fixture.get("id")
+            if not isinstance(fixture_id, (int, float)):
+                continue
+            fid = int(fixture_id)
+            teams = it.get("teams") if isinstance(it.get("teams"), dict) else {}
+            home = teams.get("home") if isinstance(teams.get("home"), dict) else {}
+            away = teams.get("away") if isinstance(teams.get("away"), dict) else {}
+            home_name = str(home.get("name") or "").strip()
+            away_name = str(away.get("name") or "").strip()
+            if not home_name or not away_name:
+                continue
+            fixtures.append({"fixture_id": fid, "home_team": home_name, "away_team": away_name, "status": short})
+
+        def _fetch(fid: int) -> Any:
+            return api_football_fetch_fixture_statistics(base_url=base, api_key=api_key, fixture_id=int(fid))
+
+        spx = build_team_spx_index(championship=str(champ), fixtures=fixtures, fetch_statistics=_fetch, min_matches=int(min_matches))
+        teams0 = spx.get("teams") if isinstance(spx, dict) else None
+        if not isinstance(teams0, dict):
+            continue
+
+        teams_out: dict[str, Any] = {}
+        for team, row in teams0.items():
+            if not isinstance(team, str) or not isinstance(row, dict):
+                continue
+            off = row.get("off_index")
+            d = row.get("def_index")
+            n_used = row.get("n_matches")
+            if not isinstance(off, (int, float)) or not isinstance(d, (int, float)) or not isinstance(n_used, (int, float)):
+                continue
+            teams_out[team] = {
+                "off_index": float(off),
+                "def_index": float(d),
+                "n_used": int(n_used),
+                "last_kickoff_unix": 0.0,
+                "off_raw_avg": float(row.get("off_raw_avg", 0.0) or 0.0),
+                "conceded_raw_avg": float(row.get("conceded_raw_avg", 0.0) or 0.0),
+            }
+
+        champs_out[str(champ)] = {"asof_unix": float(now0), "n_matches_used": int(len(fixtures)), "teams": teams_out}
+
+    payload_out = {
+        "generated_at_unix": float(now0),
+        "generated_at_utc": datetime.fromtimestamp(float(now0), tz=timezone.utc).isoformat(),
+        "meta": {"model": "team_setpiece_index_v1", "provider": "api_football", "lookback_days": int(lookback_days), "min_matches": int(min_matches)},
+        "championships": champs_out,
+    }
+    out_path = str(getattr(settings, "setpiece_index_path", "data/team_setpiece_index.json") or "data/team_setpiece_index.json")
+    write_setpiece_index_file(path=out_path, payload=payload_out)
+    return payload_out
+
+
+async def _setpiece_scheduler(provider: str, state: AppState) -> None:
+    interval = int(getattr(settings, "setpiece_refresh_interval_seconds", 86400) or 86400)
+    if interval < 1800:
+        interval = 1800
+    out_path = str(getattr(settings, "setpiece_index_path", "data/team_setpiece_index.json") or "data/team_setpiece_index.json")
+    min_matches = int(getattr(settings, "setpiece_min_matches", 6) or 6)
+    if min_matches < 3:
+        min_matches = 3
+
+    while True:
+        try:
+            if provider != "api_football":
+                await asyncio.sleep(600)
+                continue
+            api_key = str(getattr(settings, "api_football_key", "") or "").strip()
+            if not api_key:
+                await asyncio.sleep(600)
+                continue
+
+            leagues = getattr(settings, "api_football_league_ids", {})
+            seasons = getattr(settings, "api_football_season_years", {})
+            if not isinstance(leagues, dict) or not leagues or not isinstance(seasons, dict) or not seasons:
+                await asyncio.sleep(600)
+                continue
+
+            lookback_days = int(getattr(settings, "setpiece_lookback_days", 120) or 120)
+            if lookback_days < 14:
+                lookback_days = 14
+
+            now0 = time.time()
+            date_to = datetime.fromtimestamp(now0, tz=timezone.utc).date()
+            date_from = date_to - timedelta(days=int(lookback_days))
+            from_day = date_from.isoformat()
+            to_day = date_to.isoformat()
+
+            base_url = str(getattr(settings, "api_football_base_url", "https://v3.football.api-sports.io") or "https://v3.football.api-sports.io")
+            headers = {"x-apisports-key": api_key}
+            fixtures_ttl = float(getattr(settings, "fixtures_season_cache_ttl_seconds", 43200) or 43200)
+
+            championships: list[dict[str, Any]] = []
+            for champ, league_id in leagues.items():
+                try:
+                    lid = int(league_id)
+                except Exception:
+                    continue
+                season = seasons.get(champ)
+                try:
+                    season_i = int(season) if season is not None else 0
+                except Exception:
+                    season_i = 0
+                if season_i <= 0:
+                    continue
+
+                qs = urlencode({"league": lid, "season": season_i, "timezone": "UTC", "from": from_day, "to": to_day})
+                url = f"{base_url.rstrip('/')}/fixtures?{qs}"
+                cache_key = f"af_fixtures:setpiece:{lid}:{season_i}:{from_day}:{to_day}"
+
+                payload = await state.get_cache_json(cache_key)
+                if payload is None:
+                    try:
+                        payload = _http_get_json(url, headers=headers)
+                        await state.set_cache_json(cache_key, payload, fixtures_ttl)
+                    except Exception:
+                        payload = None
+
+                items = payload.get("response") if isinstance(payload, dict) else None
+                if not isinstance(items, list) or not items:
+                    continue
+
+                fixtures: list[dict[str, Any]] = []
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    fixture = it.get("fixture") if isinstance(it.get("fixture"), dict) else {}
+                    status = fixture.get("status") if isinstance(fixture.get("status"), dict) else {}
+                    short = str(status.get("short") or "").upper()
+                    if short not in {"FT", "AET", "PEN"}:
+                        continue
+                    fixture_id = fixture.get("id")
+                    if not isinstance(fixture_id, (int, float)):
+                        continue
+                    fid = int(fixture_id)
+                    teams = it.get("teams") if isinstance(it.get("teams"), dict) else {}
+                    home = teams.get("home") if isinstance(teams.get("home"), dict) else {}
+                    away = teams.get("away") if isinstance(teams.get("away"), dict) else {}
+                    home_name = str(home.get("name") or "").strip()
+                    away_name = str(away.get("name") or "").strip()
+                    if not home_name or not away_name:
+                        continue
+                    kickoff_iso = fixture.get("date")
+                    kickoff_unix = None
+                    if isinstance(kickoff_iso, str) and kickoff_iso:
+                        try:
+                            kickoff_unix = datetime.fromisoformat(kickoff_iso.replace("Z", "+00:00")).timestamp()
+                        except Exception:
+                            kickoff_unix = None
+                    fixtures.append(
+                        {
+                            "fixture_id": fid,
+                            "home_team": home_name,
+                            "away_team": away_name,
+                            "status": short,
+                            "kickoff_unix": float(kickoff_unix) if isinstance(kickoff_unix, (int, float)) else None,
+                        }
+                    )
+
+                championships.append({"name": str(champ), "fixtures_finished": fixtures})
+
+            payload_out: dict[str, Any] = {"championships": {}, "meta": {"generated_at_utc": datetime.now(timezone.utc).isoformat()}}
+
+            def fetch_stats(fixture_id: int):
+                return api_football_fetch_fixture_statistics(base_url=base_url, api_key=api_key, fixture_id=int(fixture_id))
+
+            for champ in championships:
+                champ_name = str(champ.get("name") or "").strip()
+                fixtures = champ.get("fixtures_finished")
+                if not champ_name or not isinstance(fixtures, list):
+                    continue
+                idx = build_team_spx_index(championship=champ_name, fixtures=fixtures, fetch_statistics=fetch_stats, min_matches=min_matches)
+                payload_out["championships"][champ_name] = idx
+
+            op = Path(out_path)
+            op.parent.mkdir(parents=True, exist_ok=True)
+            tmp = op.with_name(op.name + ".tmp")
+            tmp.write_text(json.dumps(payload_out, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(op)
+        except Exception:
+            pass
+
+        await asyncio.sleep(interval)
 
 async def _alpha_scheduler() -> None:
     import asyncio
@@ -859,6 +1238,9 @@ async def startup() -> None:
         app.state.ratings_task = asyncio.create_task(_ratings_scheduler(provider))
         app.state.form_task = asyncio.create_task(_form_scheduler(provider))
         app.state.team_dynamics_task = asyncio.create_task(_team_dynamics_scheduler(provider))
+    if provider == "api_football" and not os.getenv("VERCEL"):
+        app.state.territory_task = asyncio.create_task(_territory_scheduler(provider, app.state.app_state))
+        app.state.setpiece_task = asyncio.create_task(_setpiece_scheduler(provider, app.state.app_state))
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.calibration_alpha_task = asyncio.create_task(_alpha_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
@@ -894,6 +1276,16 @@ async def shutdown() -> None:
         with contextlib.suppress(Exception):
             await task
     task = getattr(app.state, "team_dynamics_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "territory_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "setpiece_task", None)
     if task is not None:
         task.cancel()
         with contextlib.suppress(Exception):
