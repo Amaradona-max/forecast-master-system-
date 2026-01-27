@@ -4,16 +4,17 @@
 
 @layer base {
   :root {
-    --color-primary: 16 185 129;
-    --color-secondary: 99 102 241;
-    --color-accent: 251 146 60;
+    --color-primary: 0 186 164;
+    --color-secondary: 40 82 255;
+    --color-accent: 14 165 233;
     --color-success: 34 197 94;
     --color-warning: 234 179 8;
     --color-error: 239 68 68;
     --color-info: 59 130 246;
+    --color-neutral: 24 24 27;
     
-    --gradient-primary: linear-gradient(135deg, rgb(16 185 129 / 0.9), rgb(99 102 241 / 0.9));
-    --gradient-accent: linear-gradient(135deg, rgb(251 146 60 / 0.9), rgb(244 63 94 / 0.9));
+    --gradient-primary: linear-gradient(135deg, rgb(0 186 164 / 0.95), rgb(40 82 255 / 0.9));
+    --gradient-accent: linear-gradient(135deg, rgb(14 165 233 / 0.95), rgb(59 130 246 / 0.9));
     
     --shadow-soft: 0 2px 15px -3px rgb(0 0 0 / 0.07), 0 10px 20px -2px rgb(0 0 0 / 0.04);
     --shadow-medium: 0 4px 20px -2px rgb(0 0 0 / 0.1), 0 12px 28px -4px rgb(0 0 0 / 0.08);
@@ -22,21 +23,22 @@
     --border-light: rgb(228 228 231 / 0.4);
     --border-medium: rgb(212 212 216 / 0.6);
     
-    --glass-bg: rgb(255 255 255 / 0.7);
-    --glass-border: rgb(255 255 255 / 0.18);
+    --glass-bg: rgb(255 255 255 / 0.72);
+    --glass-border: rgb(40 82 255 / 0.12);
   }
   
   .dark {
-    --color-primary: 52 211 153;
-    --color-secondary: 129 140 248;
-    --color-accent: 251 146 60;
+    --color-primary: 20 184 166;
+    --color-secondary: 99 102 241;
+    --color-accent: 6 182 212;
     --color-success: 74 222 128;
     --color-warning: 250 204 21;
     --color-error: 248 113 113;
     --color-info: 96 165 250;
+    --color-neutral: 9 9 11;
     
-    --gradient-primary: linear-gradient(135deg, rgb(52 211 153 / 0.85), rgb(129 140 248 / 0.85));
-    --gradient-accent: linear-gradient(135deg, rgb(251 146 60 / 0.85), rgb(244 63 94 / 0.85));
+    --gradient-primary: linear-gradient(135deg, rgb(20 184 166 / 0.9), rgb(99 102 241 / 0.9));
+    --gradient-accent: linear-gradient(135deg, rgb(6 182 212 / 0.9), rgb(96 165 250 / 0.9));
     
     --shadow-soft: 0 2px 15px -3px rgb(0 0 0 / 0.3), 0 10px 20px -2px rgb(0 0 0 / 0.2);
     --shadow-medium: 0 4px 20px -2px rgb(0 0 0 / 0.4), 0 12px 28px -4px rgb(0 0 0 / 0.3);
@@ -45,26 +47,30 @@
     --border-light: rgb(63 63 70 / 0.5);
     --border-medium: rgb(82 82 91 / 0.7);
     
-    --glass-bg: rgb(24 24 27 / 0.7);
-    --glass-border: rgb(255 255 255 / 0.1);
+    --glass-bg: rgb(9 9 11 / 0.72);
+    --glass-border: rgb(6 182 212 / 0.12);
   }
 }
 
 @layer utilities {
   .glass-panel {
-    @apply backdrop-blur-xl bg-white/70 dark:bg-zinc-900/70 border border-white/20 dark:border-white/10;
+    @apply backdrop-blur-xl bg-white/70 dark:bg-zinc-900/70 border border-white/20 dark:border-white/5;
   }
   
   .glass-card {
-    @apply backdrop-blur-md bg-white/60 dark:bg-zinc-950/60 border border-white/20 dark:border-white/10;
+    @apply backdrop-blur-md bg-white/60 dark:bg-zinc-950/60 border border-white/20 dark:border-white/5;
   }
   
   .btn-primary {
-    @apply bg-gradient-to-br from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-semibold rounded-xl px-4 py-2.5 shadow-lg shadow-emerald-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5;
+    @apply bg-gradient-to-br from-teal-500 to-indigo-600 hover:from-teal-600 hover:to-indigo-700 text-white font-semibold rounded-xl px-4 py-2.5 shadow-lg shadow-teal-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-teal-500/30 hover:-translate-y-0.5;
   }
   
   .btn-secondary {
-    @apply bg-gradient-to-br from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-semibold rounded-xl px-4 py-2.5 shadow-lg shadow-indigo-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/30 hover:-translate-y-0.5;
+    @apply bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-semibold rounded-xl px-4 py-2.5 shadow-lg shadow-cyan-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-cyan-500/30 hover:-translate-y-0.5;
+  }
+  
+  .num {
+    font-variant-numeric: tabular-nums;
   }
   
   .animate-fade-in {
@@ -80,7 +86,7 @@
   }
   
   .text-gradient {
-    @apply bg-gradient-to-br from-emerald-500 via-indigo-500 to-purple-500 bg-clip-text text-transparent;
+    @apply bg-gradient-to-br from-teal-500 via-indigo-500 to-cyan-500 bg-clip-text text-transparent;
   }
 }
 

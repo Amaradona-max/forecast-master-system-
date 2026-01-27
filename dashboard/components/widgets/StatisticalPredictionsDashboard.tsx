@@ -688,11 +688,11 @@ export function StatisticalPredictionsDashboard() {
   }, [confValue, qualityScore])
 
   const pillClass = (tone: "green" | "yellow" | "red" | "zinc" | "blue") => {
-    if (tone === "green") return "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-    if (tone === "yellow") return "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-    if (tone === "red") return "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
-    if (tone === "blue") return "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
-    return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+    if (tone === "green") return "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+    if (tone === "yellow") return "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:bg-amber-500/25 dark:text-amber-300"
+    if (tone === "red") return "border-red-500/20 bg-red-500/15 text-red-700 dark:bg-red-500/25 dark:text-red-300"
+    if (tone === "blue") return "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:bg-sky-500/25 dark:text-sky-300"
+    return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:bg-zinc-500/20 dark:text-zinc-300"
   }
 
   type Pick = { key: string; label: string; prob: number }
@@ -1081,7 +1081,7 @@ export function StatisticalPredictionsDashboard() {
       if (!pageVisible) return
       try {
         setError(null)
-        const res = await apiFetchTenant("/api/v1/overview/championships", { cache: "no-store" })
+        const res = await apiFetchTenant("/api/v1/overview/championships", { cache: "default" })
         if (!res.ok) {
           let detail = ""
           try {
@@ -1113,8 +1113,8 @@ export function StatisticalPredictionsDashboard() {
     async function load() {
       if (!pageVisible) return
       try {
-        let res = await apiFetchTenant("/api/backtest-metrics", { cache: "no-store" })
-        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-metrics", { cache: "no-store" })
+        let res = await apiFetchTenant("/api/backtest-metrics", { cache: "default" })
+        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-metrics", { cache: "default" })
         if (!res.ok) throw new Error(`backtest_metrics_failed:${res.status}`)
         const json = (await res.json()) as BacktestMetricsResponse
         if (!active) return
@@ -1126,8 +1126,8 @@ export function StatisticalPredictionsDashboard() {
       }
 
       try {
-        let res = await apiFetchTenant("/api/backtest-trends", { cache: "no-store" })
-        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-trends", { cache: "no-store" })
+        let res = await apiFetchTenant("/api/backtest-trends", { cache: "default" })
+        if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-trends", { cache: "default" })
         if (!res.ok) throw new Error(`backtest_trends_failed:${res.status}`)
         const json = (await res.json()) as BacktestTrendsResponse
         if (!active) return
@@ -1543,7 +1543,7 @@ export function StatisticalPredictionsDashboard() {
   }
 
   return (
-    <div className="relative rounded-[28px] border border-zinc-200/40 bg-[radial-gradient(circle_at_top,rgba(30,58,138,0.18),transparent_55%),radial-gradient(circle_at_top_right,rgba(190,18,60,0.14),transparent_55%),linear-gradient(180deg,rgba(24,24,27,0.25),rgba(24,24,27,0.05))] p-5 shadow-sm backdrop-blur-md dark:border-zinc-800/50 dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.18),transparent_55%),radial-gradient(circle_at_top_right,rgba(244,63,94,0.16),transparent_55%),linear-gradient(180deg,rgba(9,9,11,0.72),rgba(9,9,11,0.45))]">
+    <div className="relative rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.12),transparent_55%),radial-gradient(circle_at_top_right,rgba(14,165,233,0.12),transparent_55%),linear-gradient(180deg,rgba(255,255,255,0.75),rgba(255,255,255,0.35))] p-5 shadow-medium backdrop-blur-md dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.22),transparent_55%),radial-gradient(circle_at_top_right,rgba(99,102,241,0.22),transparent_55%),radial-gradient(circle_at_bottom,rgba(14,165,233,0.16),transparent_60%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.7))]">
       <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-white/10 dark:ring-white/10" />
 
       {error ? (
@@ -1553,47 +1553,51 @@ export function StatisticalPredictionsDashboard() {
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur-md dark:bg-zinc-950/25">
-        <div className="min-w-0 flex items-center gap-3">
-          {brandLogoUrl ? (
-            <img
-              src={brandLogoUrl}
-              alt={brandName}
-              className="h-8 w-8 rounded-lg border border-white/10 bg-white/10 object-cover"
-            />
-          ) : null}
-          <div className="min-w-0">
-            <div className="text-xs font-semibold tracking-[0.18em] text-zinc-700 dark:text-zinc-200">
-              {brandName.toUpperCase()}
+      <div className="rounded-2xl border border-white/10 bg-white/75 px-4 py-3 shadow-soft backdrop-blur-md dark:bg-[linear-gradient(135deg,rgba(15,23,42,0.72),rgba(30,41,59,0.45))]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex items-center gap-3">
+            {brandLogoUrl ? (
+              <img
+                src={brandLogoUrl}
+                alt={brandName}
+                className="h-8 w-8 rounded-lg border border-white/10 bg-white/10 object-cover"
+              />
+            ) : null}
+            <div className="min-w-0">
+              <div className="text-xs font-semibold tracking-[0.18em] text-zinc-700 dark:text-zinc-200">
+                {brandName.toUpperCase()}
+              </div>
+              <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                {brandTagline ? `${brandTagline} · ` : ""}
+                {title} · {selectedMd?.matchday_label ?? "Giornata"} · ROC-AUC {seasonAuc == null ? "n/d" : seasonAuc.toFixed(3)} · Track{" "}
+                {trackRecord?.summary?.n
+                  ? `${fmtPct(Number(trackRecord.summary.accuracy ?? 0))} · ROI avg ${fmtSigned(Number(trackRecord.summary.roi_avg ?? 0))}`
+                  : "n/d"}
+              </div>
+              {disclaimerText ? (
+                <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">{disclaimerText}</div>
+              ) : null}
             </div>
-          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-            {brandTagline ? `${brandTagline} · ` : ""}
-            {title} · {selectedMd?.matchday_label ?? "Giornata"} · ROC-AUC {seasonAuc == null ? "n/d" : seasonAuc.toFixed(3)} · Track{" "}
-            {trackRecord?.summary?.n
-              ? `${fmtPct(Number(trackRecord.summary.accuracy ?? 0))} · ROI avg ${fmtSigned(Number(trackRecord.summary.roi_avg ?? 0))}`
-              : "n/d"}
           </div>
-          {disclaimerText ? (
-            <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">{disclaimerText}</div>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {educationalOnly ? (
+              <div className="rounded-full border border-violet-400/20 bg-violet-500/15 px-3 py-1 text-[11px] font-semibold text-violet-200">
+                Educational only
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setMobileControlsOpen((v) => !v)}
+              className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:bg-zinc-950/20 dark:text-zinc-200"
+              aria-expanded={mobileControlsOpen}
+            >
+              Impostazioni
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {educationalOnly ? (
-            <div className="rounded-full border border-violet-400/20 bg-violet-500/15 px-3 py-1 text-[11px] font-semibold text-violet-200">
-              Educational only
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => setMobileControlsOpen((v) => !v)}
-            className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:bg-zinc-950/20 dark:text-zinc-200"
-            aria-expanded={mobileControlsOpen}
-          >
-            Impostazioni
-          </button>
 
-          <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
             <label className="sr-only" htmlFor="match-search">
               Cerca match
             </label>
@@ -1607,7 +1611,7 @@ export function StatisticalPredictionsDashboard() {
             <select
               value={sortMode}
               onChange={(e) => setSortMode(e.target.value as "kickoff" | "prob" | "confidence")}
-              className="rounded-lg border border-white/10 bg-white/10 px-2 py-1 text-[11px] text-zinc-700 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200"
+              className="rounded-lg border border-white/10 bg-white/85 px-2 py-1 text-[11px] text-zinc-800 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200"
               aria-label="Ordina"
             >
               <option value="prob">Top prob.</option>
@@ -1615,17 +1619,17 @@ export function StatisticalPredictionsDashboard() {
               <option value="kickoff">Kickoff</option>
             </select>
           </div>
-          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
             <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
             {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
               const active = profile === p
               const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
               const tint =
                 p === "PRUDENT"
-                  ? "border-emerald-400/20 bg-emerald-500/15 text-emerald-200"
+                  ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/25 dark:text-emerald-200"
                   : p === "AGGRESSIVE"
-                    ? "border-rose-400/20 bg-rose-500/15 text-rose-200"
-                    : "border-amber-400/20 bg-amber-500/15 text-amber-200"
+                    ? "border-rose-500/30 bg-rose-500/20 text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/25 dark:text-rose-200"
+                    : "border-amber-500/30 bg-amber-500/20 text-amber-700 dark:border-amber-400/30 dark:bg-amber-500/25 dark:text-amber-200"
               return (
                 <button
                   key={p}
@@ -1634,7 +1638,7 @@ export function StatisticalPredictionsDashboard() {
                   title={profileTooltip(p)}
                   className={[
                     "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
-                    active ? tint : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                    active ? tint : "border-white/15 bg-white/85 text-zinc-800 hover:bg-white/90 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70"
                   ].join(" ")}
                   aria-pressed={active}
                 >
@@ -1643,7 +1647,7 @@ export function StatisticalPredictionsDashboard() {
               )
             })}
           </div>
-          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-zinc-950/20">
+          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
             <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Bankroll</div>
             <input
               type="range"
@@ -1657,6 +1661,9 @@ export function StatisticalPredictionsDashboard() {
             />
             <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{bankroll}u</div>
           </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {overview.map((c) => {
             const isActive = c.championship === selectedChamp
             const col = CHAMP_COLORS[c.championship] ?? "#3b82f6"
@@ -1668,8 +1675,8 @@ export function StatisticalPredictionsDashboard() {
                 className={[
                   "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold shadow-sm backdrop-blur-md transition",
                   isActive
-                    ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
-                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                    ? "border-white/20 bg-white/20 text-zinc-900 dark:border-white/20 dark:bg-white/15 dark:text-zinc-50"
+                    : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70"
                 ].join(" ")}
                 aria-pressed={isActive}
               >
@@ -1678,6 +1685,29 @@ export function StatisticalPredictionsDashboard() {
               </button>
             )
           })}
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-white/10 bg-white/80 px-3 py-2 text-xs shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-zinc-400">Match in programma</div>
+            <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50 num">{matchesCount}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/80 px-3 py-2 text-xs shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-zinc-400">Confidence media</div>
+            <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50 num">{fmtPct(avgBest)}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/80 px-3 py-2 text-xs shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-zinc-400">Accuracy</div>
+            <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50 num">
+              {trackRecord?.summary?.n ? fmtPct(Number(trackRecord.summary.accuracy ?? 0)) : "n/d"}
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/80 px-3 py-2 text-xs shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-zinc-400">ROI medio</div>
+            <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50 num">
+              {trackRecord?.summary?.n ? fmtSigned(Number(trackRecord.summary.roi_avg ?? 0)) : "n/d"}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1689,6 +1719,12 @@ export function StatisticalPredictionsDashboard() {
               {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
                 const active = profile === p
                 const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
+                const tint =
+                    p === "PRUDENT"
+                      ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/25 dark:text-emerald-200"
+                    : p === "AGGRESSIVE"
+                      ? "border-rose-500/30 bg-rose-500/20 text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/25 dark:text-rose-200"
+                      : "border-amber-500/30 bg-amber-500/20 text-amber-700 dark:border-amber-400/30 dark:bg-amber-500/25 dark:text-amber-200"
                 return (
                   <button
                     key={p}
@@ -1697,8 +1733,8 @@ export function StatisticalPredictionsDashboard() {
                     className={[
                       "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
                       active
-                        ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
-                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                        ? tint
+                        : "border-white/15 bg-white/75 text-zinc-800 hover:bg-white/85 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70"
                     ].join(" ")}
                     aria-pressed={active}
                   >
@@ -1729,7 +1765,7 @@ export function StatisticalPredictionsDashboard() {
       ) : null}
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Card className="lg:col-span-3 !bg-white/10 !p-4 dark:!bg-zinc-950/25">
+        <Card className="lg:col-span-3 !bg-white/80 !p-4 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.85),rgba(30,41,59,0.55))]">
           <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">League Overview</div>
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Seleziona giornata e vista rapida</div>
           <div className="mt-4">
@@ -1765,7 +1801,7 @@ export function StatisticalPredictionsDashboard() {
                             key={`${r.team}-${i}`}
                             className={[
                               "grid h-5 w-5 place-items-center rounded-md border border-white/10 text-[10px] font-semibold",
-                              x === "W" ? "bg-emerald-500/20 text-emerald-200" : x === "D" ? "bg-amber-500/20 text-amber-200" : "bg-red-500/20 text-red-200"
+                              x === "W" ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" : x === "D" ? "bg-amber-500/20 text-amber-700 dark:text-amber-300" : "bg-red-500/20 text-red-700 dark:text-red-300"
                             ].join(" ")}
                           >
                             {x}
@@ -1785,7 +1821,7 @@ export function StatisticalPredictionsDashboard() {
         </Card>
 
         <div className="lg:col-span-6 space-y-4">
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25">
+          <div className="rounded-2xl border border-white/10 bg-white/80 p-4 shadow-soft backdrop-blur-md dark:bg-[linear-gradient(135deg,rgba(15,23,42,0.78),rgba(30,41,59,0.48))]">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Preferiti ⭐</div>
@@ -2067,7 +2103,7 @@ export function StatisticalPredictionsDashboard() {
           <ChaosLeaderboard matches={visibleToPlay} onOpenMatch={openExplainModal} />
           <ChaosInsights matches={visibleToPlay} />
 
-          <Card className="!bg-white/10 dark:!bg-zinc-950/25">
+          <Card className="!bg-white/80 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.8),rgba(30,41,59,0.5))]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Next Match Predictions</div>
@@ -2093,8 +2129,8 @@ export function StatisticalPredictionsDashboard() {
                   onClick={() => setFocusMode((v) => !v)}
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
                     focusMode
-                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200"
                   }`}
                   title="Mostra solo match giocabili (filtri intelligenti)"
                 >
@@ -2111,8 +2147,8 @@ export function StatisticalPredictionsDashboard() {
                   onClick={() => setPronosticiView("all")}
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
                     pronosticiView === "all"
-                      ? "border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                      ? "border-sky-500/30 bg-sky-500/15 text-sky-700 dark:bg-sky-500/25 dark:text-sky-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200"
                   }`}
                 >
                   Tutto
@@ -2123,8 +2159,8 @@ export function StatisticalPredictionsDashboard() {
                   onClick={() => setPronosticiView("play")}
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
                     pronosticiView === "play"
-                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                      ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200"
                   }`}
                   title="2 gare per campionato con profilo prudente"
                 >
@@ -2136,8 +2172,8 @@ export function StatisticalPredictionsDashboard() {
                   onClick={() => setPronosticiView("recover")}
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
                     pronosticiView === "recover"
-                      ? "border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                      : "border-white/10 bg-white/10 text-zinc-700 dark:bg-zinc-950/25 dark:text-zinc-200"
+                      ? "border-amber-500/30 bg-amber-500/15 text-amber-700 dark:bg-amber-500/25 dark:text-amber-300"
+                      : "border-white/10 bg-white/10 text-zinc-700 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200"
                   }`}
                   title="2 gare per campionato: 1 low-risk + 1 high-risk (varianza/UPSET)"
                 >
@@ -2228,8 +2264,8 @@ export function StatisticalPredictionsDashboard() {
                     className={[
                       "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
                       onlyGood
-                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70",
                     ].join(" ")}
                     aria-pressed={onlyGood}
                   >
@@ -2241,8 +2277,8 @@ export function StatisticalPredictionsDashboard() {
                     className={[
                       "rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm transition",
                       hideNoBet
-                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:bg-zinc-950/25 dark:text-zinc-200",
+                        ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+                        : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70",
                     ].join(" ")}
                     aria-pressed={hideNoBet}
                   >
@@ -2361,7 +2397,7 @@ export function StatisticalPredictionsDashboard() {
                               {educationalOnly ? "Educational only" : noBet ? "NO BET" : `Stake ${units}u (${pct.toFixed(2)}%)`}
                             </div>
                             {profile === "PRUDENT" || pct <= 2.0 ? (
-                              <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                              <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
                                 gestione prudente
                               </span>
                             ) : null}
@@ -2600,12 +2636,12 @@ export function StatisticalPredictionsDashboard() {
                                                 </span>
                                               ) : null}
                                               {best ? (
-                                                <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                                <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
                                                   migliore
                                                 </span>
                                               ) : null}
                                               {unstable ? (
-                                                <span className="rounded-full border border-amber-400/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+                                                <span className="rounded-full border border-amber-400/20 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
                                                   instabile
                                                 </span>
                                               ) : null}
@@ -2623,7 +2659,7 @@ export function StatisticalPredictionsDashboard() {
                                             </div>
                                           </div>
                                           {isUnstableMarket(selectedMarket) ? (
-                                            <div className="mt-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                                            <div className="mt-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
                                               Warning: mercato instabile (confidence bassa o rischio HIGH)
                                             </div>
                                           ) : null}
@@ -2712,7 +2748,7 @@ export function StatisticalPredictionsDashboard() {
 
           <LeaguePerformanceTable defaultOpen />
 
-          <Card className="!bg-white/10 dark:!bg-zinc-950/25">
+          <Card className="!bg-white/80 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.8),rgba(30,41,59,0.5))]">
             <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Win Probability Chart</div>
             <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Trend medio 1 / X / 2 per giornata</div>
             <WinProbabilityChart trend={trend} fmtPct={fmtPct} />
@@ -2720,7 +2756,7 @@ export function StatisticalPredictionsDashboard() {
         </div>
 
         <div className="lg:col-span-3 space-y-4">
-          <Card className="!bg-white/10 !p-4 dark:!bg-zinc-950/25">
+          <Card className="!bg-white/80 !p-4 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.85),rgba(30,41,59,0.55))]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Squadre da giocare</div>
@@ -2757,7 +2793,7 @@ export function StatisticalPredictionsDashboard() {
                           <div className="flex items-center gap-2">
                             <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">{teamKey}</div>
                             {idx === 0 ? (
-                              <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                              <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
                                 Top pick
                               </span>
                             ) : null}
@@ -2825,7 +2861,7 @@ export function StatisticalPredictionsDashboard() {
             </div>
           </Card>
 
-          <Card className="!bg-white/10 !p-4 dark:!bg-zinc-950/25">
+          <Card className="!bg-white/80 !p-4 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.85),rgba(30,41,59,0.55))]">
             <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Stats & Trends</div>
             <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Metriche derivate dal modello</div>
 
@@ -2869,7 +2905,7 @@ export function StatisticalPredictionsDashboard() {
       </div>
 
       <div className="mt-4">
-        <Card className="!bg-white/10 dark:!bg-zinc-950/25">
+        <Card className="!bg-white/80 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.8),rgba(30,41,59,0.5))]">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Track Record</div>
@@ -2932,7 +2968,7 @@ export function StatisticalPredictionsDashboard() {
           <TrackRecordChart trackSeries={trackSeries} fmtPct={fmtPct} fmtSigned={fmtSigned} trackError={trackError ?? undefined} />
         </Card>
 
-        <Card className="!bg-white/10 dark:!bg-zinc-950/25">
+        <Card className="!bg-white/80 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.8),rgba(30,41,59,0.5))]">
           <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Performance Comparison</div>
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">Confronto rapido tra leghe (giornata selezionata)</div>
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
@@ -2942,7 +2978,7 @@ export function StatisticalPredictionsDashboard() {
               const s0 = derivedStats(toPlay0)
               const col = CHAMP_COLORS[c.championship] ?? "#22c55e"
               return (
-                <Card key={c.championship} className="!bg-white/10 !p-3 dark:!bg-zinc-950/20">
+                <Card key={c.championship} className="!bg-white/80 !p-3 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.75),rgba(30,41,59,0.45))]">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{CHAMP_LABELS[c.championship] ?? c.title}</div>
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: col }} />

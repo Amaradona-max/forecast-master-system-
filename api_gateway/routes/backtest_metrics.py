@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from api_gateway.app.settings import settings
 
@@ -38,10 +38,14 @@ def _read_backtest_metrics() -> dict[str, Any]:
 
 
 @router.get("/v1/backtest-metrics")
-def get_backtest_metrics() -> dict[str, Any]:
+def get_backtest_metrics(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=900, stale-while-revalidate=86400"
+    response.headers["Vary"] = "Accept-Encoding"
     return _read_backtest_metrics()
 
 
 @router.get("/backtest-metrics")
-def get_backtest_metrics_compat() -> dict[str, Any]:
+def get_backtest_metrics_compat(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=900, stale-while-revalidate=86400"
+    response.headers["Vary"] = "Accept-Encoding"
     return _read_backtest_metrics()

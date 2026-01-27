@@ -4,14 +4,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from api_gateway.app.config import settings
 
 router = APIRouter()
 
 
 @router.get("/backtest-trends")
-def get_backtest_trends() -> dict[str, Any]:
+def get_backtest_trends(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=900, stale-while-revalidate=86400"
+    response.headers["Vary"] = "Accept-Encoding"
     path = Path(str(getattr(settings, "backtest_trends_path", "data/backtest_trends.json")))
     if not path.exists():
         return {"ok": False, "error": "backtest_trends_missing", "championships": {}}

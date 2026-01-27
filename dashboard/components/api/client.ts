@@ -139,7 +139,7 @@ export async function apiFetchTenant(path: string, init?: RequestInit) {
 
 export async function fetchSeasonProgress(championship: string = "all"): Promise<SeasonAccuracyResponse> {
   const res = await apiFetchTenant(`/api/v1/accuracy/season-progress?championship=${encodeURIComponent(championship)}`, {
-    cache: "no-store",
+    cache: "default",
   })
   if (!res.ok) throw new Error(`season_progress_failed:${res.status}`)
   return res.json()
@@ -152,7 +152,7 @@ export async function fetchLiveProbabilities(matchId: string): Promise<MatchUpda
 }
 
 export async function fetchTeamsToPlay(): Promise<TeamsToPlayResponse> {
-  const res = await apiFetchTenant("/api/v1/insights/teams-to-play", { cache: "no-store" })
+  const res = await apiFetchTenant("/api/v1/insights/teams-to-play", { cache: "default" })
   if (!res.ok) throw new Error(`teams_to_play_failed:${res.status}`)
   return res.json()
 }
@@ -160,7 +160,7 @@ export async function fetchTeamsToPlay(): Promise<TeamsToPlayResponse> {
 export async function fetchTrackRecord(championship: string = "all", days: number = 120): Promise<TrackRecordResponse> {
   const res = await apiFetchTenant(
     `/api/v1/history/track-record?championship=${encodeURIComponent(championship)}&days=${encodeURIComponent(String(days))}`,
-    { cache: "no-store" }
+    { cache: "default" }
   )
   if (!res.ok) throw new Error(`track_record_failed:${res.status}`)
   return res.json()
@@ -169,26 +169,26 @@ export async function fetchTrackRecord(championship: string = "all", days: numbe
 export async function fetchExplainTeam(championship: string, team: string): Promise<ExplainResponse> {
   const res = await apiFetchTenant(
     `/api/v1/explain/team?championship=${encodeURIComponent(championship)}&team=${encodeURIComponent(team)}`,
-    { cache: "no-store" }
+    { cache: "default" }
   )
   if (!res.ok) throw new Error(`explain_team_failed:${res.status}`)
   return res.json()
 }
 
 export async function fetchExplainMatch(matchId: string): Promise<ExplainResponse> {
-  const res = await apiFetchTenant(`/api/v1/explain/match?match_id=${encodeURIComponent(matchId)}`, { cache: "no-store" })
+  const res = await apiFetchTenant(`/api/v1/explain/match?match_id=${encodeURIComponent(matchId)}`, { cache: "default" })
   if (!res.ok) throw new Error(`explain_match_failed:${res.status}`)
   return res.json()
 }
 
 export async function fetchMultiMarketConfidence(matchId: string): Promise<MultiMarketConfidenceResponse> {
-  const res = await apiFetchTenant(`/api/v1/insights/multi-market?match_id=${encodeURIComponent(matchId)}`, { cache: "no-store" })
+  const res = await apiFetchTenant(`/api/v1/insights/multi-market?match_id=${encodeURIComponent(matchId)}`, { cache: "default" })
   if (!res.ok) throw new Error(`multi_market_failed:${res.status}`)
   return res.json()
 }
 
 export async function fetchUserProfile(): Promise<UserProfile> {
-  const res = await apiFetchTenant("/api/v1/user/profile", { cache: "no-store" })
+  const res = await apiFetchTenant("/api/v1/user/profile", { cache: "default" })
   if (!res.ok) throw new Error(`user_profile_failed:${res.status}`)
   return res.json()
 }
@@ -204,13 +204,13 @@ export async function updateUserProfile(update: UserProfileUpdate): Promise<User
 }
 
 export async function fetchTenantConfig(): Promise<TenantConfig> {
-  const res = await apiFetchTenant("/api/v1/tenant/config", { cache: "no-store" })
+  const res = await apiFetchTenant("/api/v1/tenant/config", { cache: "default" })
   if (!res.ok) throw new Error(`tenant_config_failed:${res.status}`)
   return res.json()
 }
 
 export async function fetchSystemStatus(): Promise<SystemStatusResponse> {
-  const res = await apiFetchTenant("/api/v1/system/status", { cache: "no-store" })
+  const res = await apiFetchTenant("/api/v1/system/status", { cache: "default" })
   if (!res.ok) throw new Error(`system_status_failed:${res.status}`)
   return res.json()
 }

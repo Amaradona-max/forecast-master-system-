@@ -65,7 +65,7 @@ export function ChampionshipCards() {
 
     async function loadStatus() {
       try {
-        const res = await apiFetch("/api/v1/system/status", { cache: "no-store" })
+        const res = await apiFetch("/api/v1/system/status", { cache: "default" })
         if (!res.ok) return
         const json = (await res.json()) as SystemStatusResponse
         if (active) setStatus(json)
@@ -74,7 +74,7 @@ export function ChampionshipCards() {
 
     async function run() {
       try {
-        const res = await apiFetch("/api/v1/overview/championships", { cache: "no-store" })
+        const res = await apiFetch("/api/v1/overview/championships", { cache: "default" })
         if (!res.ok) {
           let detail = ""
           try {

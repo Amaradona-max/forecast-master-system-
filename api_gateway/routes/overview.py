@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from api_gateway.app.schemas import (
@@ -212,7 +212,7 @@ def _tenant_config_from_state_row(*, row: dict[str, Any], tenant_id: str) -> Ten
 
 
 @router.get("/api/v1/tenant/config", response_model=TenantConfig)
-async def get_tenant_config(request: Request) -> TenantConfig:
+async def get_tenant_config(request: Request, response: Response) -> TenantConfig:
     if not hasattr(request.app.state, "app_state"):
         request.app.state.app_state = AppState()
     tenant_id = _tenant_id_from_request(request)
@@ -220,6 +220,8 @@ async def get_tenant_config(request: Request) -> TenantConfig:
     row = await state.get_tenant_config(tenant_id=tenant_id)
     tc = _tenant_config_from_state_row(row=row, tenant_id=tenant_id)
     _apply_region_policy(request, tc.compliance.model_dump())
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300, stale-while-revalidate=3600"
+    response.headers["Vary"] = "x-tenant-id"
     return tc
 
 
@@ -355,7 +357,7 @@ async def system_status(request: Request) -> SystemStatusResponse:
 
 
 @router.get("/api/v1/overview/championships", response_model=ChampionshipsOverviewResponse)
-async def championships_overview(request: Request) -> ChampionshipsOverviewResponse:
+async def championships_overview(request: Request, response: Response) -> ChampionshipsOverviewResponse:
     if not hasattr(request.app.state, "app_state"):
         request.app.state.app_state = AppState()
     if not hasattr(request.app.state, "ws_hub"):
@@ -367,8 +369,23 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
     tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
     tenant_compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
     _apply_region_policy(request, tenant_compliance)
-    matches = await state.list_matches()
+    now_unix0 = datetime.now(timezone.utc).timestamp()
     provider = _effective_data_provider()
+    cache_ttl = 5.0
+    cache_key = f"{tenant_id}:{provider}:{int(settings.real_data_only)}"
+    cache_store = getattr(request.app.state, "_overview_cache", None)
+    if not isinstance(cache_store, dict):
+        cache_store = {}
+        request.app.state._overview_cache = cache_store
+    cached = cache_store.get(cache_key) if isinstance(cache_store, dict) else None
+    if isinstance(cached, dict):
+        cached_ts = cached.get("ts")
+        cached_payload = cached.get("payload")
+        if isinstance(cached_ts, (int, float)) and (now_unix0 - float(cached_ts)) <= cache_ttl and cached_payload is not None:
+            response.headers["Cache-Control"] = "public, max-age=5, s-maxage=30, stale-while-revalidate=300"
+            response.headers["Vary"] = "x-tenant-id"
+            return cached_payload
+    matches = await state.list_matches()
     champs = _supported_championships(provider)
     tenant_filters = tenant_cfg.get("filters") if isinstance(tenant_cfg.get("filters"), dict) else {}
     champs = _apply_tenant_championship_filter(champs=champs, tenant_filters=tenant_filters)
@@ -556,7 +573,16 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
         active_to_play = [m for m in active_matches if m.status != "FINISHED"]
         top = sorted(active_to_play, key=lambda x: x.confidence, reverse=True)[:5]
         to_play = [m for m in top if m.confidence >= 0.7]
-        finished = [m for m in mapped if m.status == "FINISHED"]
+        thirty_days_ago = now_unix - (30 * 86400)
+        finished = sorted(
+            [
+                m
+                for m in mapped
+                if m.status == "FINISHED" and (m.kickoff_unix is not None) and (m.kickoff_unix >= thirty_days_ago)
+            ],
+            key=lambda x: (x.kickoff_unix or 0.0, x.match_id),
+            reverse=True,
+        )[:50]
 
         payload.append(
             ChampionshipOverview(
@@ -571,4 +597,8 @@ async def championships_overview(request: Request) -> ChampionshipsOverviewRespo
             )
         )
 
-    return ChampionshipsOverviewResponse(generated_at_utc=datetime.now(timezone.utc), championships=payload)
+    response.headers["Cache-Control"] = "public, max-age=5, s-maxage=30, stale-while-revalidate=300"
+    response.headers["Vary"] = "x-tenant-id"
+    out = ChampionshipsOverviewResponse(generated_at_utc=datetime.now(timezone.utc), championships=payload)
+    cache_store[cache_key] = {"ts": now_unix, "payload": out}
+    return out

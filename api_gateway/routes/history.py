@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 
@@ -136,7 +136,7 @@ async def prediction_history(
 
 
 @router.get("/api/v1/history/track-record", response_model=TrackRecordResponse)
-async def track_record(request: Request, championship: str = "all", days: int = 120) -> TrackRecordResponse:
+async def track_record(request: Request, response: Response, championship: str = "all", days: int = 120) -> TrackRecordResponse:
     state = request.app.state.app_state
     tenant_id = _tenant_id_from_request(request)
     tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
@@ -199,6 +199,8 @@ async def track_record(request: Request, championship: str = "all", days: int = 
         dt = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
         points.append(TrackPoint(date_utc=dt, n=nn, accuracy=(float(cc) / float(nn)) if nn else 0.0, roi_total=float(rr)))
 
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300, stale-while-revalidate=3600"
+    response.headers["Vary"] = "x-tenant-id, Accept-Encoding"
     return TrackRecordResponse(
         generated_at_utc=datetime.now(timezone.utc),
         championship=str(championship),

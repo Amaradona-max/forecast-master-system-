@@ -4,7 +4,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from api_gateway.app.schemas import (
     CalibrationBin,
@@ -211,7 +211,7 @@ def _build_calibration_metrics(*, matches: list[object], championship: str, wind
 
 
 @router.get("/api/v1/accuracy/season-progress", response_model=SeasonAccuracyResponse)
-async def season_progress(request: Request, championship: str = "all") -> SeasonAccuracyResponse:
+async def season_progress(request: Request, response: Response, championship: str = "all") -> SeasonAccuracyResponse:
     now = datetime.now(timezone.utc)
     state = request.app.state.app_state
     tenant_id = _tenant_id_from_request(request)
@@ -262,6 +262,8 @@ async def season_progress(request: Request, championship: str = "all") -> Season
                 roi_simulated=float(roi_avg),
             )
         )
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300, stale-while-revalidate=3600"
+    response.headers["Vary"] = "x-tenant-id"
     return SeasonAccuracyResponse(championship=championship, points=points)
 
 
