@@ -32,26 +32,26 @@ export function ResponsiveShell() {
   }
 
   return (
-    <div className="flex min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <div className="fixed right-3 top-3 z-[60] md:right-6 md:top-4">
+    <div className="flex min-h-screen">
+      <div className="fixed right-4 top-4 z-[60] md:right-6 md:top-6">
         <ThemeToggle />
       </div>
       <aside
-        className={`hidden md:flex flex-col border-r border-white/10 bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md transition-all ${
-          collapsed ? "w-[72px]" : "w-64"
+        className={`hidden md:flex flex-col border-r border-white/10 glass-panel shadow-soft transition-all duration-300 ${
+          collapsed ? "w-[80px]" : "w-72"
         }`}
       >
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="text-sm font-bold truncate">{collapsed ? "FM" : "Forecast Master"}</div>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+          <div className="text-sm font-bold text-gradient truncate">{collapsed ? "FM" : "Forecast Master"}</div>
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            className="text-xs text-zinc-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
           >
             {collapsed ? "›" : "‹"}
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 px-2">
+        <nav className="flex-1 space-y-2 px-3 py-4">
           {sections.map((s) => {
             const activeItem = active === s.key
             return (
@@ -59,49 +59,51 @@ export function ResponsiveShell() {
                 key={s.key}
                 onClick={() => setActive(s.key)}
                 className={[
-                  "w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition",
+                  "group w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200",
                   activeItem
-                    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                    ? "bg-gradient-to-br from-emerald-500/15 to-emerald-600/10 text-emerald-700 dark:text-emerald-300 shadow-soft"
+                    : "text-zinc-600 hover:bg-white/50 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
                 ].join(" ")}
               >
-                {collapsed ? s.label[0] : s.label}
+                <span className={collapsed ? "block text-center" : ""}>{collapsed ? s.label[0] : s.label}</span>
               </button>
             )
           })}
 
-          <button
-            type="button"
-            disabled
-            className={[
-              "mt-3 w-full cursor-not-allowed rounded-xl px-3 py-2 text-left text-sm font-medium transition opacity-70",
-              "text-zinc-600 dark:text-zinc-300"
-            ].join(" ")}
-          >
-            {collapsed ? "C" : "Controllo"}
-          </button>
+          <div className="pt-4 mt-4 border-t border-white/10">
+            <button
+              type="button"
+              disabled
+              className={[
+                "w-full cursor-not-allowed rounded-2xl px-4 py-3 text-left text-sm font-semibold opacity-50",
+                "text-zinc-600 dark:text-zinc-300"
+              ].join(" ")}
+            >
+              {collapsed ? "C" : "Controllo"}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setLegendOpen(true)}
-            className={[
-              "w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition",
-              "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            ].join(" ")}
-          >
-            {collapsed ? "L" : "Legenda"}
-          </button>
+            <button
+              type="button"
+              onClick={() => setLegendOpen(true)}
+              className={[
+                "w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200 mt-2",
+                "text-zinc-600 hover:bg-white/50 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
+              ].join(" ")}
+            >
+              {collapsed ? "L" : "Legenda"}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setHowToOpen(true)}
-            className={[
-              "w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition",
-              "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            ].join(" ")}
-          >
-            {collapsed ? "?" : "Come usare l'App"}
-          </button>
+            <button
+              type="button"
+              onClick={() => setHowToOpen(true)}
+              className={[
+                "w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200 mt-2",
+                "text-zinc-600 hover:bg-white/50 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
+              ].join(" ")}
+            >
+              {collapsed ? "?" : "Come usare l'App"}
+            </button>
+          </div>
         </nav>
       </aside>
 
@@ -298,7 +300,7 @@ export function ResponsiveShell() {
         </div>
       </Modal>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-white/10 bg-white/80 backdrop-blur-md dark:bg-zinc-950/80 md:hidden">
+      <nav className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-white/10 glass-panel shadow-strong md:hidden">
         {sections.map((s) => {
           const activeItem = active === s.key
           return (
@@ -306,10 +308,11 @@ export function ResponsiveShell() {
               key={s.key}
               onClick={() => setActive(s.key)}
               className={[
-                "flex flex-col items-center gap-1 py-2 text-xs font-medium transition",
-                activeItem ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-500 dark:text-zinc-400"
+                "flex flex-col items-center gap-1.5 py-3 px-4 text-xs font-semibold transition-all duration-200",
+                activeItem ? "text-emerald-600 dark:text-emerald-400 scale-110" : "text-zinc-500 dark:text-zinc-400"
               ].join(" ")}
             >
+              <span className={`h-1.5 w-1.5 rounded-full transition-all ${activeItem ? 'bg-emerald-600 dark:bg-emerald-400 scale-150' : 'bg-transparent'}`} />
               {s.label}
             </button>
           )

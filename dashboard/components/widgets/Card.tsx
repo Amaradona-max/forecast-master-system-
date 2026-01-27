@@ -4,7 +4,7 @@ export function Card({ children, className }: PropsWithChildren<{ className?: st
   return (
     <div
       className={[
-        "rounded-2xl border border-zinc-200/70 bg-white/70 p-4 shadow-sm backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-900/55",
+        "group rounded-3xl border border-white/20 bg-white/70 p-5 shadow-soft backdrop-blur-xl transition-all duration-300 hover:shadow-medium dark:border-white/10 dark:bg-zinc-900/60 animate-fade-in",
         className ?? ""
       ].join(" ")}
     >
