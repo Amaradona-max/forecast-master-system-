@@ -85,41 +85,48 @@ export function LeaguePerformanceTable({ defaultOpen = false }: { defaultOpen?: 
       setLoading(true)
       setErr(null)
       try {
-        const res = await fetch("/api/backtest-metrics", { cache: "no-store" })
-        const js = (await res.json()) as unknown
+        const [metricsResult, trendsResult] = await Promise.allSettled([
+          fetch("/api/backtest-metrics", { cache: "default" }).then((res) => res.json() as Promise<unknown>),
+          fetch("/api/backtest-trends", { cache: "default" }).then((res) => res.json() as Promise<unknown>),
+        ])
         if (!alive) return
-        if (!isRecord(js) || js.ok !== true) {
-          const msg = isRecord(js) ? String(js.error ?? "fetch_failed") : "fetch_failed"
-          setErr(msg)
+
+        if (metricsResult.status === "fulfilled") {
+          const js = metricsResult.value
+          if (!isRecord(js) || js.ok !== true) {
+            const msg = isRecord(js) ? String(js.error ?? "fetch_failed") : "fetch_failed"
+            setErr(msg)
+            setRows([])
+          } else {
+            const champs0 = js.championships
+            const champs = isRecord(champs0) ? champs0 : {}
+
+            const keys = Object.keys(champs)
+            const out: Row[] = keys
+              .map((championship) => {
+                const v = champs[championship]
+                const obj = isRecord(v) ? v : {}
+                return {
+                  championship: String(championship),
+                  n: Number(obj.n ?? 0),
+                  accuracy: Number(obj.accuracy ?? 0),
+                  brier: Number(obj.brier ?? 0),
+                  logloss: Number(obj.log_loss ?? obj.logloss ?? 0),
+                  ece: Number(obj.ece ?? 0),
+                }
+              })
+              .filter((r) => r.championship)
+            setRows(out)
+          }
+        } else {
+          setErr("fetch_failed")
           setRows([])
-          return
         }
-        const champs0 = js.championships
-        const champs = isRecord(champs0) ? champs0 : {}
 
-        const keys = Object.keys(champs)
-        const out: Row[] = keys
-          .map((championship) => {
-            const v = champs[championship]
-            const obj = isRecord(v) ? v : {}
-            return {
-              championship: String(championship),
-              n: Number(obj.n ?? 0),
-              accuracy: Number(obj.accuracy ?? 0),
-              brier: Number(obj.brier ?? 0),
-              logloss: Number(obj.log_loss ?? obj.logloss ?? 0),
-              ece: Number(obj.ece ?? 0),
-            }
-          })
-          .filter((r) => r.championship)
-        setRows(out)
-
-        try {
-          const tRes = await fetch("/api/backtest-trends", { cache: "no-store" })
-          const tJs = (await tRes.json()) as unknown
-          if (!alive) return
+        if (trendsResult.status === "fulfilled") {
+          const tJs = trendsResult.value
           if (isRecord(tJs) && tJs.ok === true && isRecord(tJs.championships)) setTrends(tJs.championships)
-        } catch {}
+        }
       } catch {
         if (!alive) return
         setErr("fetch_failed")

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 
+import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
 import { ThemeToggle } from "@/components/theme/ThemeToggle"
 import { Card } from "@/components/widgets/Card"
 import { ChampionshipComparator } from "@/components/widgets/ChampionshipComparator"
@@ -20,6 +21,10 @@ function tabLabel(k: TabKey) {
 
 export function DashboardShell() {
   const [tab, setTab] = useState<TabKey>("pred")
+  const showMatchFilters = tab === "pred"
+  const filtersLeft = null
+  const filtersRight = null
+  const filtersBottom = null
 
   const subtitle = useMemo(() => {
     if (tab === "pred") return "Consigli e spiegazioni match-by-match"
@@ -66,6 +71,10 @@ export function DashboardShell() {
         </div>
       </header>
 
+      {showMatchFilters && (
+        <StickyFiltersBar left={filtersLeft} right={filtersRight} bottom={filtersBottom} />
+      )}
+
       <div className="mt-4">
         {tab === "pred" ? (
           <StatisticalPredictionsDashboard />
@@ -93,4 +102,3 @@ export function DashboardShell() {
     </main>
   )
 }
-

@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 
+import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
 import { ThemeToggle } from "@/components/theme/ThemeToggle"
 import { Modal } from "@/components/ui/Modal"
 import { ChampionshipComparator } from "@/components/widgets/ChampionshipComparator"
@@ -46,6 +47,10 @@ export function ResponsiveShell() {
   const [collapsed, setCollapsed] = useState(false)
   const [legendOpen, setLegendOpen] = useState(false)
   const [howToOpen, setHowToOpen] = useState(false)
+  const showMatchFilters = active === "pred"
+  const filtersLeft = null
+  const filtersRight = null
+  const filtersBottom = null
 
   const Content = () => {
     if (active === "pred") return <StatisticalPredictionsDashboard />
@@ -102,28 +107,6 @@ export function ResponsiveShell() {
             >
               {collapsed ? "C" : "Controllo"}
             </button>
-
-            <button
-              type="button"
-              onClick={() => setLegendOpen(true)}
-              className={[
-                "w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200 mt-2",
-                "text-zinc-700 hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
-              ].join(" ")}
-            >
-              {collapsed ? "L" : "Legenda"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setHowToOpen(true)}
-              className={[
-                "w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200 mt-2",
-                "text-zinc-700 hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
-              ].join(" ")}
-            >
-              {collapsed ? "?" : "Come usare l'App"}
-            </button>
           </div>
         </nav>
         </aside>
@@ -173,6 +156,10 @@ export function ResponsiveShell() {
               ))}
             </div>
           </header>
+
+          {showMatchFilters && (
+            <StickyFiltersBar left={filtersLeft} right={filtersRight} bottom={filtersBottom} />
+          )}
 
           <div className="rounded-[24px] border border-white/10 bg-white/70 p-2 shadow-soft backdrop-blur-md dark:bg-zinc-950/20 md:hidden">
             <div className="flex gap-2 overflow-x-auto px-1 py-1">

@@ -18,13 +18,16 @@ import {
   getApiBaseUrl,
   updateUserProfile
 } from "@/components/api/client"
+import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
 import { Card } from "@/components/widgets/Card"
 import { ChaosInsights } from "@/components/widgets/ChaosInsights"
 import { ChaosLeaderboard } from "@/components/widgets/ChaosLeaderboard"
 import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
 import { PronosticiPicks } from "@/components/widgets/PronosticiPicks"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
+import { MatchRow } from "@/components/widgets/matches/MatchRow"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
+import { DensityToggle } from "@/components/ui/DensityToggle"
 import { Modal } from "@/components/ui/Modal"
 import { PredictionBar } from "@/components/ui/PredictionBar"
 import { VirtualList } from "@/components/ui/VirtualList"
@@ -387,6 +390,7 @@ export function StatisticalPredictionsDashboard() {
   }
 
   const [watchlist, setWatchlist] = useLocalStorage<WatchItem[]>("fm_watchlist_v1", [])
+  const [density, setDensity] = useLocalStorage<"comfort" | "compact">("fm_density", "comfort")
   const [overview, setOverview] = useState<ChampionshipOverview[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [systemStatus, setSystemStatus] = useState<{ data_provider: string; data_error?: string | null; football_data_key_present: boolean; api_football_key_present: boolean } | null>(null)
@@ -1113,29 +1117,36 @@ export function StatisticalPredictionsDashboard() {
     let active = true
     async function load() {
       if (!pageVisible) return
-      try {
+      const fetchBacktestMetrics = async () => {
         let res = await apiFetchTenant("/api/backtest-metrics", { cache: "default" })
         if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-metrics", { cache: "default" })
         if (!res.ok) throw new Error(`backtest_metrics_failed:${res.status}`)
-        const json = (await res.json()) as BacktestMetricsResponse
-        if (!active) return
-        if (json?.ok && json?.championships) setLeagueMetrics(json.championships)
-        setBacktestMetrics(json?.ok ? json : null)
-      } catch {
-        if (!active) return
-        setBacktestMetrics(null)
+        return (await res.json()) as BacktestMetricsResponse
       }
 
-      try {
+      const fetchBacktestTrends = async () => {
         let res = await apiFetchTenant("/api/backtest-trends", { cache: "default" })
         if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-trends", { cache: "default" })
         if (!res.ok) throw new Error(`backtest_trends_failed:${res.status}`)
-        const json = (await res.json()) as BacktestTrendsResponse
-        if (!active) return
+        return (await res.json()) as BacktestTrendsResponse
+      }
+
+      const [metricsResult, trendsResult] = await Promise.allSettled([fetchBacktestMetrics(), fetchBacktestTrends()])
+      if (!active) return
+
+      if (metricsResult.status === "fulfilled") {
+        const json = metricsResult.value
+        if (json?.ok && json?.championships) setLeagueMetrics(json.championships)
+        setBacktestMetrics(json?.ok ? json : null)
+      } else {
+        setBacktestMetrics(null)
+      }
+
+      if (trendsResult.status === "fulfilled") {
+        const json = trendsResult.value
         if (json?.ok && json?.championships) setLeagueTrends(json.championships)
         setBacktestTrends(json?.ok ? json : null)
-      } catch {
-        if (!active) return
+      } else {
         setLeagueTrends({})
         setBacktestTrends(null)
       }
@@ -1373,6 +1384,88 @@ export function StatisticalPredictionsDashboard() {
   const matchesCount = filteredBaseToPlay.length
   const avgBest = matchesCount ? filteredBaseToPlay.reduce((acc, m) => acc + bestProb(m), 0) / matchesCount : 0
   const gaugeValue = avgBest
+  const searchInput = (
+    <>
+      <label className="sr-only" htmlFor="match-search">
+        Cerca match
+      </label>
+      <input
+        id="match-search"
+        value={matchQuery}
+        onChange={(e) => setMatchQuery(e.target.value)}
+        placeholder="Cerca team…"
+        className="w-40 bg-transparent text-xs text-zinc-900 placeholder:text-zinc-500 outline-none dark:text-zinc-50 dark:placeholder:text-zinc-400"
+      />
+    </>
+  )
+  const sortSelect = (
+    <select
+      value={sortMode}
+      onChange={(e) => setSortMode(e.target.value as "kickoff" | "prob" | "confidence")}
+      className="rounded-lg border border-white/10 bg-white/85 px-2 py-1 text-[11px] text-zinc-800 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200"
+      aria-label="Ordina"
+    >
+      <option value="prob">Top prob.</option>
+      <option value="confidence">Confidence</option>
+      <option value="kickoff">Kickoff</option>
+    </select>
+  )
+  const settingsButton = (
+    <button
+      type="button"
+      onClick={() => setMobileControlsOpen((v) => !v)}
+      className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:bg-zinc-950/20 dark:text-zinc-200"
+      aria-expanded={mobileControlsOpen}
+    >
+      Impostazioni
+    </button>
+  )
+  const filtersBottom = (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+        <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
+        {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
+          const active = profile === p
+          const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
+          const tint =
+            p === "PRUDENT"
+              ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/25 dark:text-emerald-200"
+              : p === "AGGRESSIVE"
+                ? "border-rose-500/30 bg-rose-500/20 text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/25 dark:text-rose-200"
+                : "border-amber-500/30 bg-amber-500/20 text-amber-700 dark:border-amber-400/30 dark:bg-amber-500/25 dark:text-amber-200"
+          return (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setProfile(p)}
+              title={profileTooltip(p)}
+              className={[
+                "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                active ? tint : "border-white/15 bg-white/85 text-zinc-800 hover:bg-white/90 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70"
+              ].join(" ")}
+              aria-pressed={active}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
+      <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+        <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Bankroll</div>
+        <input
+          type="range"
+          min={50}
+          max={1000}
+          step={10}
+          value={bankroll}
+          onChange={(e) => setBankroll(Number(e.target.value))}
+          className="w-28 accent-emerald-500"
+          aria-label="Bankroll"
+        />
+        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{bankroll}u</div>
+      </div>
+    </div>
+  )
   const teamsToPlayItem = useMemo(() => {
     const items = teamsToPlay?.items ?? []
     const target = String(champ?.title ?? CHAMP_LABELS[selectedChamp] ?? "").trim().toLowerCase()
@@ -1586,84 +1679,8 @@ export function StatisticalPredictionsDashboard() {
                 Educational only
               </div>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setMobileControlsOpen((v) => !v)}
-              className="md:hidden rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:bg-zinc-950/20 dark:text-zinc-200"
-              aria-expanded={mobileControlsOpen}
-            >
-              Impostazioni
-            </button>
           </div>
         </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
-            <label className="sr-only" htmlFor="match-search">
-              Cerca match
-            </label>
-            <input
-              id="match-search"
-              value={matchQuery}
-              onChange={(e) => setMatchQuery(e.target.value)}
-              placeholder="Cerca team…"
-              className="w-40 bg-transparent text-xs text-zinc-900 placeholder:text-zinc-500 outline-none dark:text-zinc-50 dark:placeholder:text-zinc-400"
-            />
-            <select
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as "kickoff" | "prob" | "confidence")}
-              className="rounded-lg border border-white/10 bg-white/85 px-2 py-1 text-[11px] text-zinc-800 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 dark:text-zinc-200"
-              aria-label="Ordina"
-            >
-              <option value="prob">Top prob.</option>
-              <option value="confidence">Confidence</option>
-              <option value="kickoff">Kickoff</option>
-            </select>
-          </div>
-          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
-            <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Profilo</div>
-            {(["PRUDENT", "BALANCED", "AGGRESSIVE"] as const).filter((p) => !disabledProfiles.includes(p)).map((p) => {
-              const active = profile === p
-              const label = p === "PRUDENT" ? "Prudente" : p === "AGGRESSIVE" ? "Aggressivo" : "Bilanciato"
-              const tint =
-                p === "PRUDENT"
-                  ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/25 dark:text-emerald-200"
-                  : p === "AGGRESSIVE"
-                    ? "border-rose-500/30 bg-rose-500/20 text-rose-700 dark:border-rose-400/30 dark:bg-rose-500/25 dark:text-rose-200"
-                    : "border-amber-500/30 bg-amber-500/20 text-amber-700 dark:border-amber-400/30 dark:bg-amber-500/25 dark:text-amber-200"
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setProfile(p)}
-                  title={profileTooltip(p)}
-                  className={[
-                    "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
-                    active ? tint : "border-white/15 bg-white/85 text-zinc-800 hover:bg-white/90 dark:border-white/10 dark:bg-slate-900/60 dark:text-zinc-200 dark:hover:bg-slate-900/70"
-                  ].join(" ")}
-                  aria-pressed={active}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-          <div className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
-            <div className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">Bankroll</div>
-            <input
-              type="range"
-              min={50}
-              max={1000}
-              step={10}
-              value={bankroll}
-              onChange={(e) => setBankroll(Number(e.target.value))}
-              className="w-28 accent-emerald-500"
-              aria-label="Bankroll"
-            />
-            <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{bankroll}u</div>
-          </div>
-        </div>
-
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {overview.map((c) => {
             const isActive = c.championship === selectedChamp
@@ -1711,6 +1728,22 @@ export function StatisticalPredictionsDashboard() {
           </div>
         </div>
       </div>
+
+      <StickyFiltersBar
+        left={
+          <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/80 px-3 py-2 shadow-sm backdrop-blur-md dark:bg-slate-900/40">
+            {searchInput}
+            {sortSelect}
+          </div>
+        }
+        right={
+          <>
+            <DensityToggle value={density} onChange={setDensity} />
+            {settingsButton}
+          </>
+        }
+        bottom={filtersBottom}
+      />
 
       {mobileControlsOpen ? (
         <div className="mt-3 grid grid-cols-1 gap-3 rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-md dark:bg-zinc-950/25 md:hidden">
@@ -2355,80 +2388,92 @@ export function StatisticalPredictionsDashboard() {
                         ...["1X2", "OVER_2_5", "BTTS"].filter((k) => marketKeys.includes(k)),
                         ...marketKeys.filter((k) => !["1X2", "OVER_2_5", "BTTS"].includes(k))
                       ]
-                  return (
+                  const titleRight = (
+                    <div className="shrink-0 flex flex-col items-end gap-2 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        {(() => {
+                          const t = leagueTrend(String((m as { championship?: unknown } | null | undefined)?.championship ?? ""))
+                          if (t.label === "n/d") return null
+                          return (
+                            <span
+                              className={[
+                                "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                                pillClass(t.tone === "green" ? "green" : t.tone === "red" ? "red" : "zinc")
+                              ].join(" ")}
+                              title={t.title}
+                            >
+                              {t.label}
+                            </span>
+                          )
+                        })()}
+                        <span
+                          className={[
+                            "rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                            pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
+                          ].join(" ")}
+                          title={[advice, bestPick ? `Pick: ${bestPick.label}` : ""].filter(Boolean).join(" ")}
+                        >
+                          {q.grade}
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50 num">
+                        {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+                          {educationalOnly ? "Educational only" : noBet ? "NO BET" : `Stake ${units}u (${pct.toFixed(2)}%)`}
+                        </div>
+                        {profile === "PRUDENT" || pct <= 2.0 ? (
+                          <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                            gestione prudente
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailMatch(mWithP)
+                            setDetailOpen(true)
+                          }}
+                          className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:text-zinc-200"
+                        >
+                          Dettagli
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleExplainMatch(m.match_id)}
+                          className={[
+                            "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
+                            open
+                              ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
+                              : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
+                          ].join(" ")}
+                        >
+                          Perché?
+                        </button>
+                      </div>
+                    </div>
+                  )
+                  return density === "compact" ? (
+                    <MatchRow
+                      key={m.match_id}
+                      m={m}
+                      p1={p1}
+                      px={px}
+                      p2={p2}
+                      watched={watched}
+                      onToggleWatch={() => onToggleWatch(m)}
+                      rightSlot={titleRight}
+                    />
+                  ) : (
                     <NextMatchItem
                       key={m.match_id}
                       m={m}
                       matchKey={matchId(m)}
                       watched={watched}
                       onToggleWatch={() => onToggleWatch(m)}
-                      titleRight={
-                        <div className="shrink-0 flex flex-col items-end gap-2 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            {(() => {
-                              const t = leagueTrend(String((m as { championship?: unknown } | null | undefined)?.championship ?? ""))
-                              if (t.label === "n/d") return null
-                              return (
-                                <span
-                                  className={[
-                                    "rounded-full border px-2 py-0.5 text-[10px] font-bold",
-                                    pillClass(t.tone === "green" ? "green" : t.tone === "red" ? "red" : "zinc")
-                                  ].join(" ")}
-                                  title={t.title}
-                                >
-                                  {t.label}
-                                </span>
-                              )
-                            })()}
-                            <span
-                              className={[
-                                "rounded-full border px-2 py-0.5 text-[10px] font-bold",
-                                pillClass(q.grade === "A" ? "green" : q.grade === "B" ? "blue" : q.grade === "C" ? "yellow" : "red")
-                              ].join(" ")}
-                              title={[advice, bestPick ? `Pick: ${bestPick.label}` : ""].filter(Boolean).join(" ")}
-                            >
-                              {q.grade}
-                            </span>
-                          </div>
-                          <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50 num">
-                            {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
-                              {educationalOnly ? "Educational only" : noBet ? "NO BET" : `Stake ${units}u (${pct.toFixed(2)}%)`}
-                            </div>
-                            {profile === "PRUDENT" || pct <= 2.0 ? (
-                              <span className="rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-                                gestione prudente
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailMatch(mWithP)
-                                setDetailOpen(true)
-                              }}
-                              className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/15 dark:text-zinc-200"
-                            >
-                              Dettagli
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleExplainMatch(m.match_id)}
-                              className={[
-                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur-md transition",
-                                open
-                                  ? "border-white/20 bg-white/20 text-zinc-900 dark:bg-white/10 dark:text-zinc-50"
-                                  : "border-white/10 bg-white/10 text-zinc-700 hover:bg-white/15 dark:text-zinc-200"
-                              ].join(" ")}
-                            >
-                              Perché?
-                            </button>
-                          </div>
-                        </div>
-                      }
+                      titleRight={titleRight}
                     >
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <span
