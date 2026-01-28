@@ -26,6 +26,7 @@ import { PronosticiPicks } from "@/components/widgets/PronosticiPicks"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
 import { Modal } from "@/components/ui/Modal"
+import { PredictionBar } from "@/components/ui/PredictionBar"
 import { VirtualList } from "@/components/ui/VirtualList"
 import { useLocalStorage } from "@/lib/useLocalStorage"
 
@@ -2389,7 +2390,7 @@ export function StatisticalPredictionsDashboard() {
                               {q.grade}
                             </span>
                           </div>
-                          <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                          <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50 num">
                             {Math.round(p1 * 100)}% / {Math.round(px * 100)}% / {Math.round(p2 * 100)}%
                           </div>
                           <div className="flex items-center gap-2">
@@ -2497,6 +2498,7 @@ export function StatisticalPredictionsDashboard() {
                           </span>
                         ) : null}
                       </div>
+                      <PredictionBar p1={p1} px={px} p2={p2} className="mt-3" />
                       {(() => {
                         const obj = m as { explain?: unknown } | null | undefined
                         const explain0 = obj?.explain

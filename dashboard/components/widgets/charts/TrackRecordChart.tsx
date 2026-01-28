@@ -2,6 +2,8 @@
 
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
+import { GlassTooltip } from "./ChartTooltip"
+
 export function TrackRecordChart({
   trackSeries,
   fmtPct,
@@ -27,6 +29,7 @@ export function TrackRecordChart({
                 if (name === "roi_total") return [fmtSigned(Number(value)), "ROI tot"]
                 return [String(value), String(name)]
               }}
+              content={<GlassTooltip />}
             />
             <Line yAxisId="acc" type="monotone" dataKey="accuracy" stroke="#22c55e" strokeWidth={2} dot={false} />
             <Line yAxisId="roi" type="monotone" dataKey="roi_total" stroke="#3b82f6" strokeWidth={2} dot={false} />

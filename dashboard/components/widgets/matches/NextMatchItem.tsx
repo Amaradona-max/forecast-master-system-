@@ -20,13 +20,24 @@ export const NextMatchItem = React.memo(function NextMatchItem({
   children?: React.ReactNode
 }) {
   return (
-    <div key={matchKey} className="rounded-2xl border border-white/10 bg-white/10 p-4 shadow-sm dark:bg-zinc-950/25">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 truncate text-sm font-semibold">
-          {m.home_team} – {m.away_team}
+    <section
+      key={matchKey}
+      className="rounded-3xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25"
+    >
+      <header className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-zinc-500 dark:text-zinc-400">
+            Match
+          </div>
+          <div className="mt-1 text-base font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+            <span className="break-words">{m.home_team}</span>
+            <span className="mx-1 text-zinc-400 dark:text-zinc-500">vs</span>
+            <span className="break-words">{m.away_team}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {titleRight}
+
+        <div className="flex items-start justify-between gap-2 sm:justify-end">
+          <div className="min-w-0">{titleRight}</div>
           <button
             type="button"
             onClick={onToggleWatch}
@@ -42,10 +53,9 @@ export const NextMatchItem = React.memo(function NextMatchItem({
             {watched ? "★" : "☆"}
           </button>
         </div>
-      </div>
+      </header>
 
       <div className="mt-3">{children}</div>
-    </div>
+    </section>
   )
 })
-
