@@ -1,0 +1,22 @@
+{
+  "generated_at_utc": "2026-01-29T18:22:03.769187+00:00",
+  "generated_at_unix": 1769710923.7677498,
+  "meta": {
+    "model": "temperature_scaling_multiclass_v1",
+    "lookback_days": 60,
+    "per_league_limit": 800,
+    "min_samples": 60,
+    "market": "1x2",
+    "grid": [
+      0.7,
+      0.85,
+      1.0,
+      1.15,
+      1.35,
+      1.6,
+      1.9,
+      2.2
+    ]
+  },
+  "championships": {}
+}

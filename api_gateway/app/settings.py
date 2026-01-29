@@ -26,6 +26,27 @@ class Settings(BaseSettings):
     calibration_alpha_lookback_days: int = 60
     calibration_alpha_per_league_limit: int = 600
     calibration_alpha_min_samples: int = 40
+    
+    # --- Temperature Scaling Calibration ---
+    calibration_temperature_enabled: bool = True
+    calibration_temperature_path: str = "data/calibration_temperature.json"
+    calibration_temperature_refresh_interval_seconds: int = 21600
+    calibration_temperature_weekend_refresh_interval_seconds: int = 7200
+    calibration_temperature_lookback_days: int = 60
+    calibration_temperature_per_league_limit: int = 800
+    calibration_temperature_min_samples: int = 60
+    
+    # --- Drift Monitor ---
+    drift_monitor_enabled: bool = True
+    drift_status_path: str = "data/drift_status.json"
+    drift_refresh_interval_seconds: int = 21600
+    drift_weekend_refresh_interval_seconds: int = 7200
+    drift_recent_days: int = 30
+    drift_baseline_days: int = 365
+    drift_min_samples: int = 120
+    drift_psi_warn: float = 0.15
+    drift_psi_high: float = 0.25
+    
     backtest_metrics_enabled: bool = True
     backtest_metrics_path: str = "data/backtest_metrics.json"
     backtest_metrics_refresh_interval_seconds: int = 21600  # 6 ore

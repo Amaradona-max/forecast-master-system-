@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-01-28T17:34:57.099902+00:00",
-  "generated_at_unix": 1769621697.098898,
+  "generated_at_utc": "2026-01-29T18:22:03.766756+00:00",
+  "generated_at_unix": 1769710923.765151,
   "meta": {
     "model": "alpha_inseason_v1",
     "lookback_days": 60,

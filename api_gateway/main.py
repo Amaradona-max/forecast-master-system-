@@ -23,6 +23,8 @@ from api_gateway.app.auto_refresh_orchestrator import AutoRefreshOrchestrator
 from api_gateway.app.backtest_metrics import rebuild_backtest_metrics_to_file
 from api_gateway.app.backtest_trends import rebuild_backtest_trends_to_file
 from api_gateway.app.calibration_alpha import rebuild_calibration_alpha
+from api_gateway.app.calibration_temperature import rebuild_calibration_temperature
+from api_gateway.app.drift_monitor import rebuild_drift_status
 from api_gateway.app.decision_gate_tuning import TuneParams, rebuild_decision_gate_tuned
 from api_gateway.app.local_files import load_calendar_fixtures
 from api_gateway.app.services import PredictionService
@@ -794,6 +796,76 @@ async def _alpha_scheduler() -> None:
         await asyncio.sleep(300)
 
 
+async def _temperature_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "calibration_temperature_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = float(getattr(settings, "calibration_temperature_refresh_interval_seconds", 21600))
+        weekend_interval = float(getattr(settings, "calibration_temperature_weekend_refresh_interval_seconds", 7200))
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_temp_refresh_last_unix", 0.0) or 0.0
+        if (now0 - float(last)) >= float(interval):
+            app.state._temp_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_calibration_temperature(
+                    db_path=str(getattr(settings, "state_db_path", "data/forecast_state.sqlite3")),
+                    out_path=str(getattr(settings, "calibration_temperature_path", "data/calibration_temperature.json")),
+                    lookback_days=int(getattr(settings, "calibration_temperature_lookback_days", 60)),
+                    per_league_limit=int(getattr(settings, "calibration_temperature_per_league_limit", 800)),
+                    min_samples=int(getattr(settings, "calibration_temperature_min_samples", 60)),
+                    market="1x2",
+                )
+
+        await asyncio.sleep(300)
+
+
+async def _drift_scheduler() -> None:
+    import asyncio
+    import contextlib
+    import time
+    from datetime import datetime, timezone
+
+    while True:
+        now0 = time.time()
+        if not bool(getattr(settings, "drift_monitor_enabled", True)):
+            await asyncio.sleep(300)
+            continue
+
+        now_dt = datetime.fromtimestamp(now0, tz=timezone.utc)
+        interval = float(getattr(settings, "drift_refresh_interval_seconds", 21600))
+        weekend_interval = float(getattr(settings, "drift_weekend_refresh_interval_seconds", 7200))
+        if weekend_interval > 0 and now_dt.weekday() >= 5:
+            interval = max(900.0, weekend_interval)
+
+        last = getattr(app.state, "_drift_refresh_last_unix", 0.0) or 0.0
+        if (now0 - float(last)) >= float(interval):
+            app.state._drift_refresh_last_unix = now0
+            with contextlib.suppress(Exception):
+                rebuild_drift_status(
+                    db_path=str(getattr(settings, "state_db_path", "data/forecast_state.sqlite3")),
+                    out_path=str(getattr(settings, "drift_status_path", "data/drift_status.json")),
+                    recent_days=int(getattr(settings, "drift_recent_days", 30)),
+                    baseline_days=int(getattr(settings, "drift_baseline_days", 365)),
+                    min_samples=int(getattr(settings, "drift_min_samples", 120)),
+                    psi_warn=float(getattr(settings, "drift_psi_warn", 0.15)),
+                    psi_high=float(getattr(settings, "drift_psi_high", 0.25)),
+                    market="1x2",
+                )
+
+        await asyncio.sleep(300)
+
+
 async def _backtest_metrics_scheduler() -> None:
     import asyncio
     import contextlib
@@ -1244,6 +1316,10 @@ async def startup() -> None:
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.calibration_alpha_task = asyncio.create_task(_alpha_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.calibration_temperature_task = asyncio.create_task(_temperature_scheduler())
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
+        app.state.drift_monitor_task = asyncio.create_task(_drift_scheduler())
+    if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.backtest_metrics_task = asyncio.create_task(_backtest_metrics_scheduler())
     if provider in {"football_data", "api_football", "mock", "local_files"} and not os.getenv("VERCEL"):
         app.state.backtest_trends_task = asyncio.create_task(_backtest_trends_scheduler())
@@ -1291,6 +1367,16 @@ async def shutdown() -> None:
         with contextlib.suppress(Exception):
             await task
     task = getattr(app.state, "calibration_alpha_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "calibration_temperature_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(Exception):
+            await task
+    task = getattr(app.state, "drift_monitor_task", None)
     if task is not None:
         task.cancel()
         with contextlib.suppress(Exception):

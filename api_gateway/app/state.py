@@ -173,6 +173,7 @@ class AppState:
                         predicted_pick TEXT NOT NULL,
                         predicted_prob REAL NOT NULL,
                         confidence REAL NOT NULL,
+                        probabilities_json TEXT,
                         predicted_at_unix REAL NOT NULL,
                         kickoff_unix REAL,
                         final_outcome TEXT,
@@ -191,6 +192,11 @@ class AppState:
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_championship ON matches(championship);")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_matches_kickoff_unix ON matches(kickoff_unix);")
+                
+                # ---- MIGRATION: add probabilities_json if missing
+                cols = [r[1] for r in con.execute("PRAGMA table_info(predictions_history);").fetchall()]
+                if "probabilities_json" not in cols:
+                    con.execute("ALTER TABLE predictions_history ADD COLUMN probabilities_json TEXT;")
             self._db_enabled = True
         except Exception:
             self._db_enabled = False
@@ -493,6 +499,7 @@ class AppState:
         confidence: float,
         predicted_at_unix: float,
         kickoff_unix: float | None,
+        probabilities: dict[str, Any] | None,   # <-- NEW
     ) -> None:
         if not self._db_enabled:
             return
@@ -513,6 +520,15 @@ class AppState:
             conf = 0.0
         if conf > 1.0:
             conf = 1.0
+        
+        # Serializza le probabilità complete in JSON
+        probs_json = None
+        if isinstance(probabilities, dict) and probabilities:
+            try:
+                probs_json = json.dumps(probabilities, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                probs_json = None
+        
         with sqlite3.connect(self._db_path, timeout=5) as con:
             con.execute(
                 """
@@ -528,6 +544,7 @@ class AppState:
                     confidence,
                     predicted_at_unix,
                     kickoff_unix,
+                    probabilities_json,
                     final_outcome,
                     final_home_goals,
                     final_away_goals,
@@ -535,7 +552,7 @@ class AppState:
                     roi_simulated,
                     resolved_at_unix
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
                 ON CONFLICT(match_id, market) DO UPDATE SET
                     prediction_id=excluded.prediction_id,
                     championship=excluded.championship,
@@ -545,7 +562,8 @@ class AppState:
                     predicted_prob=excluded.predicted_prob,
                     confidence=excluded.confidence,
                     predicted_at_unix=excluded.predicted_at_unix,
-                    kickoff_unix=excluded.kickoff_unix;
+                    kickoff_unix=excluded.kickoff_unix,
+                    probabilities_json=excluded.probabilities_json;
                 """,
                 (
                     pid,
@@ -559,6 +577,7 @@ class AppState:
                     float(conf),
                     float(predicted_at_unix),
                     float(kickoff_unix) if isinstance(kickoff_unix, (int, float)) else None,
+                    probs_json,
                 ),
             )
 
@@ -1113,6 +1132,7 @@ class AppState:
         predicted_prob: float,
         confidence: float,
         kickoff_unix: float | None,
+        probabilities: dict[str, Any] | None = None,
     ) -> None:
         if not self._db_enabled:
             return
@@ -1134,6 +1154,7 @@ class AppState:
             confidence=float(confidence),
             predicted_at_unix=float(time.time()),
             kickoff_unix=float(kickoff_unix) if isinstance(kickoff_unix, (int, float)) else None,
+            probabilities=probabilities,
         )
 
     async def list_prediction_history(

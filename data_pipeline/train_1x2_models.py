@@ -49,6 +49,82 @@ CALENDAR_SHEETS: dict[str, str] = {
 }
 
 
+def _recency_weights(dates: pd.Series, *, half_life_days: float = 365.0) -> np.ndarray | None:
+    if dates is None:
+        return None
+    dt = pd.to_datetime(dates, errors="coerce")
+    if dt.isna().all():
+        return None
+    max_dt = dt.max()
+    dt = dt.fillna(max_dt)
+    age_days = (max_dt - dt).dt.total_seconds() / 86400.0
+    decay = np.exp(-np.log(2.0) * age_days / float(half_life_days))
+    # clamp per evitare pesi troppo piccoli
+    decay = np.clip(decay, 0.15, 1.0)
+    return decay.to_numpy(dtype=float)
+
+
+def _fit_best_logit(
+    *,
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_test: pd.DataFrame,
+    y_test: np.ndarray,
+    sample_weight: np.ndarray | None,
+) -> tuple[Pipeline, dict[str, Any], list[dict[str, Any]], np.ndarray]:
+    c_grid = [0.4, 0.8, 1.2, 2.0]
+    cw_grid = [None, "balanced"]
+    trials: list[dict[str, Any]] = []
+    best_ll = float("inf")
+    best_pipe = None
+    best_meta: dict[str, Any] = {}
+    best_proba: np.ndarray | None = None
+
+    for C in c_grid:
+        for cw in cw_grid:
+            pipe = Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                    ("clf", LogisticRegression(max_iter=3000, multi_class="multinomial", C=C, class_weight=cw)),
+                ]
+            )
+            if sample_weight is not None:
+                pipe.fit(X_train, y_train, clf__sample_weight=sample_weight)
+            else:
+                pipe.fit(X_train, y_train)
+
+            proba0 = pipe.predict_proba(X_test)
+            clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+            classes = getattr(clf, "classes_", None)
+            proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
+
+            ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
+            acc = float(accuracy_score(y_test, pipe.predict(X_test)))
+            brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
+            score = float(ll + brier)
+            trials.append(
+                {
+                    "C": float(C),
+                    "class_weight": cw if cw is not None else "none",
+                    "accuracy": acc,
+                    "log_loss": ll,
+                    "brier": brier,
+                    "score": score,
+                }
+            )
+            if math.isfinite(ll) and ll < best_ll:
+                best_ll = ll
+                best_pipe = pipe
+                best_meta = {"C": float(C), "class_weight": cw if cw is not None else "none"}
+                best_proba = proba
+
+    if best_pipe is None or best_proba is None:
+        raise ValueError("train_failed")
+
+    return best_pipe, best_meta, trials, best_proba
+
+
 def _resolve_input_path(*, base_dir: Path, filename: str) -> Path:
     p0 = (base_dir / filename).resolve()
     if p0.exists():
@@ -392,20 +468,16 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
     split = max(1, min(n - 1, split))
     X_train, X_test = X.iloc[:split], X.iloc[split:]
     y_train, y_test = y[:split], y[split:]
+    train_dates = df["Date"].iloc[:split] if "Date" in df.columns else None
+    sample_weight = _recency_weights(train_dates) if train_dates is not None else None
 
-    pipe = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(max_iter=2000, multi_class="multinomial")),
-        ]
+    pipe, best_meta, trials, proba = _fit_best_logit(
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test,
+        y_test=y_test,
+        sample_weight=sample_weight,
     )
-    pipe.fit(X_train, y_train)
-
-    proba0 = pipe.predict_proba(X_test)
-    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
-    classes = getattr(clf, "classes_", None)
-    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -450,6 +522,7 @@ def train_one_league(*, league: LeagueSpec, base_dir: Path, out_dir: Path, split
         "samples_calibrate": int(len(X_test)),
         "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
+        "tuning": {"best": best_meta, "trials": trials, "sample_weight": {"half_life_days": 365.0, "enabled": sample_weight is not None}},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
         "generated_at_utc": datetime.utcnow().isoformat(),
@@ -590,20 +663,16 @@ def train_one_league_local_calendar(
     split = max(1, min(n - 1, split))
     X_train, X_test = X.iloc[:split], X.iloc[split:]
     y_train, y_test = y[:split], y[split:]
+    train_dates = df_season["Date"].iloc[:split] if "Date" in df_season.columns else None
+    sample_weight = _recency_weights(train_dates) if train_dates is not None else None
 
-    pipe = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(max_iter=2000, multi_class="multinomial")),
-        ]
+    pipe, best_meta, trials, proba = _fit_best_logit(
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test,
+        y_test=y_test,
+        sample_weight=sample_weight,
     )
-    pipe.fit(X_train, y_train)
-
-    proba0 = pipe.predict_proba(X_test)
-    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
-    classes = getattr(clf, "classes_", None)
-    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -647,6 +716,7 @@ def train_one_league_local_calendar(
         "samples_calibrate": int(len(X_test)),
         "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
+        "tuning": {"best": best_meta, "trials": trials, "sample_weight": {"half_life_days": 365.0, "enabled": sample_weight is not None}},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
         "generated_at_utc": datetime.utcnow().isoformat(),
@@ -698,20 +768,16 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
     split = max(1, min(n - 1, split))
     X_train, X_test = X.iloc[:split], X.iloc[split:]
     y_train, y_test = y[:split], y[split:]
+    train_dates = df["utc_date"].iloc[:split] if "utc_date" in df.columns else None
+    sample_weight = _recency_weights(train_dates) if train_dates is not None else None
 
-    pipe = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(max_iter=2000, multi_class="multinomial")),
-        ]
+    pipe, best_meta, trials, proba = _fit_best_logit(
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test,
+        y_test=y_test,
+        sample_weight=sample_weight,
     )
-    pipe.fit(X_train, y_train)
-
-    proba0 = pipe.predict_proba(X_test)
-    clf = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
-    classes = getattr(clf, "classes_", None)
-    proba = _reorder_proba_to_labels(proba=proba0, classes=classes, labels=LABELS_1X2)
     acc = float(accuracy_score(y_test, pipe.predict(X_test)))
     ll = float(log_loss(y_test, proba, labels=LABELS_1X2))
     brier = float(_brier_multiclass(y_test, proba, LABELS_1X2))
@@ -755,6 +821,7 @@ def train_one_league_csv(*, championship: str, csv_path: Path, out_dir: Path, sp
         "samples_calibrate": int(len(X_test)),
         "calibration_method": str(calibrator.get("method") or "platt_ovr"),
         "metrics": {"accuracy": acc, "log_loss": ll, "brier": brier},
+        "tuning": {"best": best_meta, "trials": trials, "sample_weight": {"half_life_days": 365.0, "enabled": sample_weight is not None}},
         "feature_cols": feature_cols,
         "labels": LABELS_1X2,
         "generated_at_utc": datetime.utcnow().isoformat(),

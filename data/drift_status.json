@@ -1,0 +1,13 @@
+{
+  "generated_at_utc": "2026-01-29T18:22:03.771127+00:00",
+  "generated_at_unix": 1769710923.769856,
+  "meta": {
+    "market": "1x2",
+    "recent_days": 30,
+    "baseline_days": 365,
+    "min_samples": 120,
+    "psi_warn": 0.15,
+    "psi_high": 0.25
+  },
+  "championships": {}
+}
