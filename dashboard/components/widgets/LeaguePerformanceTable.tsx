@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 
+import { apiFetchTenant } from "@/components/api/client"
+
 type Row = {
   championship: string
   n: number
@@ -85,10 +87,21 @@ export function LeaguePerformanceTable({ defaultOpen = false }: { defaultOpen?: 
       setLoading(true)
       setErr(null)
       try {
-        const [metricsResult, trendsResult] = await Promise.allSettled([
-          fetch("/api/backtest-metrics", { cache: "default" }).then((res) => res.json() as Promise<unknown>),
-          fetch("/api/backtest-trends", { cache: "default" }).then((res) => res.json() as Promise<unknown>),
-        ])
+        const fetchMetrics = async () => {
+          let res = await apiFetchTenant("/api/backtest-metrics", { cache: "default" })
+          if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-metrics", { cache: "default" })
+          if (!res.ok) throw new Error(`backtest_metrics_failed:${res.status}`)
+          return (await res.json()) as unknown
+        }
+
+        const fetchTrends = async () => {
+          let res = await apiFetchTenant("/api/backtest-trends", { cache: "default" })
+          if (!res.ok) res = await apiFetchTenant("/api/v1/backtest-trends", { cache: "default" })
+          if (!res.ok) throw new Error(`backtest_trends_failed:${res.status}`)
+          return (await res.json()) as unknown
+        }
+
+        const [metricsResult, trendsResult] = await Promise.allSettled([fetchMetrics(), fetchTrends()])
         if (!alive) return
 
         if (metricsResult.status === "fulfilled") {
