@@ -10,14 +10,18 @@ from typing import Any
 from ml_engine.ensemble_predictor.service import EnsemblePredictorService
 from ml_engine.cache.cache_keys import build_cache_key, stable_json_hash
 from ml_engine.cache.sqlite_cache import SqliteCache
+from ml_engine.features.builder import build_features_1x2
 from ml_engine.features.schema import FEATURE_VERSION
+from ml_engine.logit_1x2_runtime import load_model
 from ml_engine.resilience.degradation import build_degradation
 from ml_engine.resilience.timeouts import time_left_ms
 from ml_engine.config import artifact_dir, cache_db_path
+from ml_engine.team_ratings_store import get_team_strength
 from api_gateway.app.chaos_index import compute_chaos
 from api_gateway.app.calibration_temperature import apply_temperature
 from api_gateway.app.decision_gate import adjust_thresholds_for_chaos, evaluate_decision, load_tuned_thresholds, select_thresholds
 from api_gateway.app.settings import settings
+from api_gateway.app.explainability import compute_shap_like
 from api_gateway.app.team_name_resolver import TeamNameResolver
 from api_gateway.app.team_name_resolver import canonicalize
 
@@ -612,6 +616,40 @@ class PredictionService:
             ranges0 = cached_payload.get("ranges")
             probs = dict(probs0) if isinstance(probs0, dict) else {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
             explain = dict(explain0) if isinstance(explain0, dict) else {}
+            shap_like = None
+            try:
+                payload = load_model(str(championship))
+                pipe = payload.get("pipeline") if isinstance(payload, dict) else None
+                feature_names = payload.get("feature_cols") if isinstance(payload, dict) else None
+                if pipe is not None and isinstance(feature_names, list):
+                    model = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+                    if model is None and hasattr(pipe, "coef_"):
+                        model = pipe
+                    if model is not None and hasattr(model, "coef_"):
+                        classes = getattr(model, "classes_", None)
+                        coef_matrix = model.coef_
+                        intercepts = model.intercept_
+                        if isinstance(classes, (list, tuple)) and hasattr(coef_matrix, "__len__") and hasattr(intercepts, "__len__"):
+                            home_lookup = get_team_strength(championship=str(championship), team=str(home_team_n))
+                            away_lookup = get_team_strength(championship=str(championship), team=str(away_team_n))
+                            home_elo = home_lookup.meta.get("elo") if home_lookup is not None else None
+                            away_elo = away_lookup.meta.get("elo") if away_lookup is not None else None
+                            features_dict, _, _ = build_features_1x2(home_elo=home_elo, away_elo=away_elo, context=ctx)
+                            coefs_by_class = {
+                                str(cls): {fname: float(coef_matrix[i][j]) for j, fname in enumerate(feature_names)}
+                                for i, cls in enumerate(classes)
+                            }
+                            intercept_by_class = {str(cls): float(intercepts[i]) for i, cls in enumerate(classes)}
+                            target = max(probs.items(), key=lambda x: x[1])[0]
+                            shap_like = compute_shap_like(
+                                features=features_dict,
+                                coefs=coefs_by_class,
+                                intercepts=intercept_by_class,
+                                target=target,
+                            )
+            except Exception:
+                shap_like = None
+            explain["why"] = shap_like
             deg = build_degradation(cache_disabled=False, calibration_disabled=False, deadline_low=deadline_low)
             explain["degradation_level"] = int(deg.level)
             explain["warnings"] = list(deg.warnings)
@@ -844,6 +882,41 @@ class PredictionService:
                         }
         except Exception:
             pass
+
+        shap_like = None
+        try:
+            payload = load_model(str(championship))
+            pipe = payload.get("pipeline") if isinstance(payload, dict) else None
+            feature_names = payload.get("feature_cols") if isinstance(payload, dict) else None
+            if pipe is not None and isinstance(feature_names, list):
+                model = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+                if model is None and hasattr(pipe, "coef_"):
+                    model = pipe
+                if model is not None and hasattr(model, "coef_"):
+                    classes = getattr(model, "classes_", None)
+                    coef_matrix = model.coef_
+                    intercepts = model.intercept_
+                    if isinstance(classes, (list, tuple)) and hasattr(coef_matrix, "__len__") and hasattr(intercepts, "__len__"):
+                        home_lookup = get_team_strength(championship=str(championship), team=str(home_team_n))
+                        away_lookup = get_team_strength(championship=str(championship), team=str(away_team_n))
+                        home_elo = home_lookup.meta.get("elo") if home_lookup is not None else None
+                        away_elo = away_lookup.meta.get("elo") if away_lookup is not None else None
+                        features_dict, _, _ = build_features_1x2(home_elo=home_elo, away_elo=away_elo, context=ctx)
+                        coefs_by_class = {
+                            str(cls): {fname: float(coef_matrix[i][j]) for j, fname in enumerate(feature_names)}
+                            for i, cls in enumerate(classes)
+                        }
+                        intercept_by_class = {str(cls): float(intercepts[i]) for i, cls in enumerate(classes)}
+                        target = max(probs.items(), key=lambda x: x[1])[0]
+                        shap_like = compute_shap_like(
+                            features=features_dict,
+                            coefs=coefs_by_class,
+                            intercepts=intercept_by_class,
+                            target=target,
+                        )
+        except Exception:
+            shap_like = None
+        explain["why"] = shap_like
 
         out = PredictionResult(probabilities=probs, explain=explain, confidence=float(conf) if conf is not None else None, ranges=ranges)
 

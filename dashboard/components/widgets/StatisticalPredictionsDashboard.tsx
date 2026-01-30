@@ -22,6 +22,7 @@ import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
 import { Card } from "@/components/widgets/Card"
 import { ChaosInsights } from "@/components/widgets/ChaosInsights"
 import { ChaosLeaderboard } from "@/components/widgets/ChaosLeaderboard"
+import { ExplainabilityCard } from "@/components/widgets/ExplainabilityCard"
 import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
 import { PronosticiPicks } from "@/components/widgets/PronosticiPicks"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
@@ -3205,9 +3206,7 @@ export function StatisticalPredictionsDashboard() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
-              Dettagli avanzati: qui puoi mostrare eventuali spiegazioni estese, feature, o dati modello (se disponibili).
-            </div>
+            <ExplainabilityCard why={(detailMatch?.explain as Record<string, unknown> | undefined)?.why} />
           </div>
         ) : (
           <div className="text-sm text-zinc-600 dark:text-zinc-300">n/d</div>

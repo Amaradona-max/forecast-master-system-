@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useState } from "react"
 
 import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
@@ -40,6 +41,15 @@ const sectionMeta: Record<Section, { title: string; subtitle: string; steps: str
     subtitle: "Panoramica rapida delle leghe con dati comparabili.",
     steps: ["Seleziona le leghe", "Leggi i KPI principali", "Identifica differenze chiave"]
   }
+}
+
+function ShieldCheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
+      <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6l7-3z" />
+      <path d="M9.2 12.2l2 2.1 4.2-4.3" />
+    </svg>
+  )
 }
 
 export function ResponsiveShell() {
@@ -97,16 +107,15 @@ export function ResponsiveShell() {
           })}
 
           <div className="pt-4 mt-4 border-t border-white/10">
-            <button
-              type="button"
-              disabled
-              className={[
-                "w-full cursor-not-allowed rounded-2xl px-4 py-3 text-left text-sm font-semibold opacity-50",
-                "text-zinc-700 dark:text-zinc-300"
-              ].join(" ")}
+            <Link
+              href="/reliability"
+              className="group w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200 text-zinc-700 hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
             >
-              {collapsed ? "C" : "Controllo"}
-            </button>
+              <span className={collapsed ? "flex items-center justify-center" : "flex items-center gap-2"}>
+                <ShieldCheckIcon className="h-4 w-4" />
+                {collapsed ? null : <span>Affidabilità</span>}
+              </span>
+            </Link>
           </div>
         </nav>
         </aside>

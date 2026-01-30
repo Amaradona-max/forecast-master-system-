@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api_gateway.app.explainability_compare import compare_shap_like
+from api_gateway.app.explainability_nlg import summarize_match_compare
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState
+from ml_engine.features.builder import build_features_1x2
+from ml_engine.logit_1x2_runtime import load_model
+from ml_engine.team_ratings_store import get_team_strength
 
 
 router = APIRouter()
@@ -401,12 +407,65 @@ class ExplainResponse(BaseModel):
     context: ExplainContext | None = None
 
 
+class CompareDriver(BaseModel):
+    feature: str
+    delta: float
+    impact_pct: float
+    winner: str
+
+
+class ComparePayload(BaseModel):
+    target: str
+    match_a: str
+    match_b: str
+    prob_a: float
+    prob_b: float
+    confidence_a: float
+    confidence_b: float
+    summary_text: str | None = None
+    drivers: list[CompareDriver] = Field(default_factory=list)
+
+
+class CompareResponse(BaseModel):
+    compare: ComparePayload
+
+
 def _norm_team(name: Any) -> str:
     s = str(name or "").strip()
     s = " ".join(s.split())
     if len(s) > 80:
         s = s[:80]
     return s
+
+
+def _pick_target_from_probs(probs: dict[str, Any]) -> str | None:
+    if not isinstance(probs, dict):
+        return None
+    best = None
+    best_v = -1.0
+    for k in ("home_win", "draw", "away_win"):
+        v = probs.get(k)
+        if not isinstance(v, (int, float)):
+            continue
+        fv = float(v)
+        if not math.isfinite(fv):
+            continue
+        if fv > best_v:
+            best_v = fv
+            best = k
+    return best
+
+
+def _target_for_probs(target: str) -> str:
+    mapping = {"H": "home_win", "D": "draw", "A": "away_win"}
+    return mapping.get(str(target), str(target))
+
+
+def _confidence_from_probs(probs: dict[str, Any]) -> float:
+    if not isinstance(probs, dict):
+        return 0.0
+    vals = [float(v) for v in probs.values() if isinstance(v, (int, float)) and math.isfinite(float(v))]
+    return max(vals) if vals else 0.0
 
 
 def _strength_stats_for_team(ratings: dict[str, dict[str, float]], championship: str, team: str) -> tuple[float | None, float | None]:
@@ -620,6 +679,113 @@ async def explain_match(request: Request, match_id: str) -> ExplainResponse:
         strength=ExplainTeamStrength(team=str(team), strength_pct=strength_pct, strength_vs_avg_pp=strength_vs_avg_pp),
         form=ExplainForm(last_n=7, w=int(w), d=int(d), l=int(l)),
         context=ctx,
+    )
+
+
+@router.get("/api/v1/explain/compare", response_model=CompareResponse)
+async def explain_compare(request: Request, match_a: str, match_b: str, target: str | None = None, top_k: int = 6) -> CompareResponse:
+    state = request.app.state.app_state
+    a = await state.get_match(str(match_a))
+    b = await state.get_match(str(match_b))
+    if a is None:
+        raise HTTPException(status_code=404, detail="match_a_not_found")
+    if b is None:
+        raise HTTPException(status_code=404, detail="match_b_not_found")
+
+    champ_a = str(getattr(a, "championship", "") or "")
+    champ_b = str(getattr(b, "championship", "") or "")
+    if champ_a != champ_b:
+        raise HTTPException(status_code=400, detail="championship_mismatch")
+
+    payload = load_model(str(champ_a))
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=503, detail="model_not_available")
+    pipe = payload.get("pipeline") if isinstance(payload, dict) else None
+    feature_names = payload.get("feature_cols") if isinstance(payload, dict) else None
+    if pipe is None or not isinstance(feature_names, list) or not feature_names:
+        raise HTTPException(status_code=503, detail="model_invalid")
+
+    model = pipe.named_steps.get("clf") if hasattr(pipe, "named_steps") else None
+    if model is None and hasattr(pipe, "coef_"):
+        model = pipe
+    if model is None or not hasattr(model, "coef_") or not hasattr(model, "intercept_"):
+        raise HTTPException(status_code=503, detail="model_invalid")
+
+    classes = getattr(model, "classes_", None)
+    coef_matrix = model.coef_
+    if not isinstance(classes, (list, tuple)) or not hasattr(coef_matrix, "__len__"):
+        raise HTTPException(status_code=503, detail="model_invalid")
+
+    coefs_by_class = {
+        str(cls): {fname: float(coef_matrix[i][j]) for j, fname in enumerate(feature_names)}
+        for i, cls in enumerate(classes)
+    }
+
+    a_home = _norm_team(getattr(a, "home_team", ""))
+    a_away = _norm_team(getattr(a, "away_team", ""))
+    b_home = _norm_team(getattr(b, "home_team", ""))
+    b_away = _norm_team(getattr(b, "away_team", ""))
+
+    a_meta = getattr(a, "meta", None)
+    b_meta = getattr(b, "meta", None)
+    ctx_a = a_meta.get("context") if isinstance(a_meta, dict) and isinstance(a_meta.get("context"), dict) else {}
+    ctx_b = b_meta.get("context") if isinstance(b_meta, dict) and isinstance(b_meta.get("context"), dict) else {}
+
+    a_home_lookup = get_team_strength(championship=str(champ_a), team=str(a_home))
+    a_away_lookup = get_team_strength(championship=str(champ_a), team=str(a_away))
+    b_home_lookup = get_team_strength(championship=str(champ_a), team=str(b_home))
+    b_away_lookup = get_team_strength(championship=str(champ_a), team=str(b_away))
+
+    a_home_elo = a_home_lookup.meta.get("elo") if a_home_lookup is not None else None
+    a_away_elo = a_away_lookup.meta.get("elo") if a_away_lookup is not None else None
+    b_home_elo = b_home_lookup.meta.get("elo") if b_home_lookup is not None else None
+    b_away_elo = b_away_lookup.meta.get("elo") if b_away_lookup is not None else None
+
+    features_a, _, _ = build_features_1x2(home_elo=a_home_elo, away_elo=a_away_elo, context=ctx_a)
+    features_b, _, _ = build_features_1x2(home_elo=b_home_elo, away_elo=b_away_elo, context=ctx_b)
+
+    probs_a = getattr(a, "probabilities", None)
+    probs_b = getattr(b, "probabilities", None)
+    probs_a_dict = probs_a if isinstance(probs_a, dict) else {}
+    probs_b_dict = probs_b if isinstance(probs_b, dict) else {}
+
+    target_key = str(target or _pick_target_from_probs(probs_a_dict) or "home_win")
+    pred_a = a_meta if isinstance(a_meta, dict) else {}
+    pred_b = b_meta if isinstance(b_meta, dict) else {}
+    compare = compare_shap_like(
+        explain_a=pred_a.get("explain", {}).get("why"),
+        explain_b=pred_b.get("explain", {}).get("why"),
+        features_a=features_a,
+        features_b=features_b,
+        coefs=coefs_by_class,
+        target=target_key,
+        top_k=int(top_k),
+    )
+    if not isinstance(compare, dict):
+        raise HTTPException(status_code=503, detail="compare_unavailable")
+    summary = summarize_match_compare(compare, max_factors=3)
+    if summary:
+        compare["summary_text"] = summary
+
+    prob_key = _target_for_probs(target_key)
+    prob_a = float(probs_a_dict.get(prob_key, 0.0) or 0.0)
+    prob_b = float(probs_b_dict.get(prob_key, 0.0) or 0.0)
+    conf_a = float(_confidence_from_probs(probs_a_dict))
+    conf_b = float(_confidence_from_probs(probs_b_dict))
+    summary_text = compare.get("summary_text") if isinstance(compare.get("summary_text"), str) else None
+
+    return CompareResponse(
+        compare=ComparePayload(
+            target=str(compare.get("target") or target_key),
+            match_a=f"{a_home} vs {a_away}".strip(),
+            match_b=f"{b_home} vs {b_away}".strip(),
+            prob_a=round(prob_a, 4),
+            prob_b=round(prob_b, 4),
+            confidence_a=round(conf_a, 4),
+            confidence_b=round(conf_b, 4),
+            summary_text=summary_text,
+            drivers=[CompareDriver(**d) for d in (compare.get("drivers") or []) if isinstance(d, dict)],
+        )
     )
 
 
