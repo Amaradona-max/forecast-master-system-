@@ -702,25 +702,31 @@ export function StatisticalPredictionsDashboard() {
     return "Segnali non abbastanza forti"
   }
 
-  const isNoBet = useCallback((m: unknown) => {
+  const decisionGate = useCallback((m: unknown) => {
     const obj = m as Record<string, unknown> | null | undefined
     const explain0 = obj?.explain
-    if (explain0 && typeof explain0 === "object") {
-      const dg0 = (explain0 as Record<string, unknown>)?.decision_gate
-      if (dg0 && typeof dg0 === "object") {
-        const dg = dg0 as Record<string, unknown>
-        const r = String(dg?.recommendation ?? dg?.decision ?? "")
-        if (r.toUpperCase().includes("NO")) return true
-        if (dg?.allow === false) return true
-        if (dg?.allow === true) return false
-      }
+    if (!explain0 || typeof explain0 !== "object") return null
+    const explain = explain0 as Record<string, unknown>
+    const dg0 = explain.decision_gate ?? explain.decision
+    if (!dg0 || typeof dg0 !== "object") return null
+    return dg0 as Record<string, unknown>
+  }, [])
+
+  const isNoBet = useCallback((m: unknown) => {
+    const dg = decisionGate(m)
+    if (dg) {
+      if (typeof dg.no_bet === "boolean") return dg.no_bet
+      const r = String(dg?.recommendation ?? dg?.decision ?? "")
+      if (r.toUpperCase().includes("NO")) return true
+      if (dg?.allow === false) return true
+      if (dg?.allow === true) return false
     }
 
     const q = qualityScore(m)
     const p = clamp01(bestProb(m as OverviewMatch))
     const c = clamp01(confValue(m))
     return q.grade === "D" || p < 0.5 || c < 0.5
-  }, [confValue, qualityScore])
+  }, [confValue, decisionGate, qualityScore])
 
   const pillClass = (tone: "green" | "yellow" | "red" | "zinc" | "blue") => {
     if (tone === "green") return "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
@@ -909,13 +915,26 @@ export function StatisticalPredictionsDashboard() {
     return { label, tone, title }
   }
 
+  const tierBadge = (m: unknown) => {
+    const dg = decisionGate(m)
+    if (!dg) return null
+    const tier = String(dg.confidence_tier ?? "").toUpperCase()
+    if (!["S", "A", "B", "C"].includes(tier)) return null
+    const tone: "green" | "blue" | "yellow" | "zinc" =
+      tier === "S" ? "green" : tier === "A" ? "blue" : tier === "B" ? "yellow" : "zinc"
+    return { label: `TIER ${tier}`, tone, title: `Confidence Tier ${tier}` }
+  }
+
   const badgeList = (m: unknown) => {
     const badges: {
       label: string
-      kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces"
+      kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces" | "tier"
       tone?: "green" | "yellow" | "red" | "zinc" | "blue"
       title?: string
     }[] = []
+
+    const tier = tierBadge(m)
+    if (tier) badges.unshift({ label: tier.label, kind: "tier", tone: tier.tone, title: tier.title })
 
     const rb = reliabilityBadge(m)
     if (rb) badges.unshift(rb)
@@ -1676,6 +1695,28 @@ export function StatisticalPredictionsDashboard() {
     void loadMatchDetails(key)
   }
 
+  const modalMatch = useMemo(() => {
+    const key = String(chaosExplainMatchId ?? "").trim()
+    if (!key) return null
+    return matchById.get(key) ?? null
+  }, [chaosExplainMatchId, matchById])
+
+  const modalExplain = (modalMatch?.explain ?? {}) as Record<string, unknown>
+  const modalDecisionGate = (modalExplain?.decision_gate ?? null) as Record<string, unknown> | null
+  const modalEV = (modalExplain?.ev ?? null) as Record<string, unknown> | null
+  const modalWarnings = Array.isArray(modalDecisionGate?.warnings) ? (modalDecisionGate?.warnings as unknown[]) : []
+  const modalReasons = Array.isArray(modalDecisionGate?.reasons) ? (modalDecisionGate?.reasons as unknown[]) : []
+  const modalConfidenceTier = typeof modalDecisionGate?.confidence_tier === "string" ? (modalDecisionGate.confidence_tier as string) : null
+  const modalConfidenceScore = typeof modalDecisionGate?.confidence_score === "number" ? (modalDecisionGate.confidence_score as number) : null
+  const modalBestEV = (() => {
+    if (!modalEV) return null
+    const best = (modalEV as Record<string, unknown>).best
+    return best && typeof best === "object" ? (best as Record<string, unknown>) : null
+  })()
+  const modalBestEVValue = typeof modalBestEV?.ev === "number" ? (modalBestEV.ev as number) : null
+  const modalBestEVOutcome = typeof modalBestEV?.outcome === "string" ? (modalBestEV.outcome as string) : null
+  const modalBestEVOdds = typeof modalBestEV?.odds === "number" ? (modalBestEV.odds as number) : null
+
   const apiErrorLabel =
     error === "api_unreachable" || error === "api_disabled"
       ? "API non raggiungibile (backend offline)."
@@ -2430,7 +2471,7 @@ export function StatisticalPredictionsDashboard() {
                 matches={toPlay}
                 mode="play"
                 champLabels={CHAMP_LABELS}
-                onOpenMatch={(id) => toggleExplainMatch(String(id))}
+                onOpenMatch={(id) => openExplainModal(String(id))}
               />
             ) : null}
 
@@ -2439,7 +2480,7 @@ export function StatisticalPredictionsDashboard() {
                 matches={toPlay}
                 mode="recover"
                 champLabels={CHAMP_LABELS}
-                onOpenMatch={(id) => toggleExplainMatch(String(id))}
+                onOpenMatch={(id) => openExplainModal(String(id))}
               />
             ) : null}
 
@@ -2741,6 +2782,61 @@ export function StatisticalPredictionsDashboard() {
                           {open ? (
                             <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
                               <div className="space-y-3">
+                                <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Perché (Explain)</div>
+                                      <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                                        {matchExplainLoading ? "Caricamento…" : matchExplainError ? `Errore: ${matchExplainError}` : "Dettagli generati dal motore explainability."}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {matchExplain?.why?.length ? (
+                                        <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold dark:bg-zinc-950/20">
+                                          {matchExplain.why.length} segnali
+                                        </span>
+                                      ) : null}
+                                      {matchExplain?.risks?.length ? (
+                                        <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold dark:bg-zinc-950/20">
+                                          {matchExplain.risks.length} rischi
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+
+                                  {matchExplain && !matchExplainLoading ? (
+                                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                      <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+                                        <div className="text-[11px] font-bold text-zinc-700 dark:text-zinc-200">Segnali</div>
+                                        <div className="mt-2 space-y-1">
+                                          {(matchExplain.why ?? []).slice(0, 10).map((w, i) => (
+                                            <div key={i} className="text-xs text-zinc-900 dark:text-zinc-50">• {w}</div>
+                                          ))}
+                                          {!matchExplain.why?.length ? (
+                                            <div className="text-xs text-zinc-600 dark:text-zinc-300">Nessun segnale specifico riportato.</div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+
+                                      <div className="rounded-2xl border border-white/10 bg-white/10 p-3 dark:bg-zinc-950/20">
+                                        <div className="text-[11px] font-bold text-zinc-700 dark:text-zinc-200">Rischi</div>
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                          {(matchExplain.risks ?? []).slice(0, 10).map((r, i) => (
+                                            <span
+                                              key={i}
+                                              className="rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] text-zinc-900 dark:bg-zinc-950/20 dark:text-zinc-50"
+                                            >
+                                              {r}
+                                            </span>
+                                          ))}
+                                          {!matchExplain.risks?.length ? (
+                                            <div className="text-xs text-zinc-600 dark:text-zinc-300">Nessun rischio particolare riportato.</div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
                                 <div className="space-y-2">
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="font-semibold text-zinc-900 dark:text-zinc-50">Mercati</div>
@@ -3279,6 +3375,58 @@ export function StatisticalPredictionsDashboard() {
             <div className="mt-2 space-y-1">
               {chaosExplainFlags.length ? chaosExplainFlags.map((f, i) => <div key={`cflag-${i}`}>• {f}</div>) : <div>n/d</div>}
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-semibold text-zinc-900 dark:text-zinc-50">Decision Gate</div>
+              <div className="flex flex-wrap gap-2">
+                {modalConfidenceTier ? (
+                  <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold dark:bg-zinc-950/20">
+                    Tier {modalConfidenceTier}
+                  </span>
+                ) : null}
+                {typeof modalConfidenceScore === "number" ? (
+                  <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold dark:bg-zinc-950/20">
+                    Conf {Math.round(modalConfidenceScore * 100)}%
+                  </span>
+                ) : null}
+                {modalBestEVValue !== null ? (
+                  <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-bold dark:bg-zinc-950/20">
+                    EV {modalBestEVValue.toFixed(2)}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {modalWarnings.length ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {modalWarnings.slice(0, 4).map((w, i) => (
+                  <span
+                    key={`dg-w-${i}`}
+                    className="rounded-full border border-amber-500/20 bg-amber-500/15 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-200"
+                  >
+                    {String(w)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            {modalReasons.length ? (
+              <div className="mt-2 space-y-1">
+                <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Motivi</div>
+                {modalReasons.slice(0, 6).map((t, i) => (
+                  <div key={`dg-r-${i}`}>• {String(t)}</div>
+                ))}
+              </div>
+            ) : null}
+
+            {modalBestEVOutcome ? (
+              <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+                Best EV: <span className="font-semibold text-zinc-900 dark:text-zinc-50">{modalBestEVOutcome}</span>
+                {typeof modalBestEVOdds === "number" ? <span className="ml-2">Odds {modalBestEVOdds.toFixed(2)}</span> : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">

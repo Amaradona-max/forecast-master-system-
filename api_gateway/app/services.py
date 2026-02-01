@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import get_close_matches
@@ -26,6 +28,50 @@ from api_gateway.app.fragility import fragility_from_probs
 from api_gateway.app.explainability_nlg import summarize_match_compare, summarize_match_compare_long
 from api_gateway.app.team_name_resolver import TeamNameResolver
 from api_gateway.app.team_name_resolver import canonicalize
+
+
+SIMILARITY_BUCKETS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "similarity_buckets.json")
+
+
+@lru_cache(maxsize=1)
+def _load_similarity_buckets() -> dict:
+    try:
+        with open(SIMILARITY_BUCKETS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _bucketize_chaos(x: float | None) -> str:
+    if x is None:
+        return "na"
+    try:
+        v = float(x)
+    except Exception:
+        return "na"
+    if v >= 85:
+        return "vhigh"
+    if v >= 70:
+        return "high"
+    if v >= 55:
+        return "mid"
+    return "low"
+
+
+def _norm_fragility(level: str | None) -> str:
+    if not level:
+        return "na"
+    v = str(level).strip().lower()
+    if v in {"very_high", "vhigh"}:
+        return "very_high"
+    if v in {"high"}:
+        return "high"
+    if v in {"medium", "mid"}:
+        return "medium"
+    if v in {"low"}:
+        return "low"
+    return v
 
 
 @dataclass(frozen=True)
@@ -512,6 +558,12 @@ class PredictionService:
             probs = {"home_win": 1 / 3, "draw": 1 / 3, "away_win": 1 / 3}
             explain = {"degradation_level": 3, "warnings": ["deadline_low"], "safe_mode": True, "safe_mode_reason": "deadline_low"}
             explain["chaos"] = {"index": 0.0, "upset_watch": False, "flags": [], "inputs": {"available": False}}
+            fragility = None
+            try:
+                fragility = fragility_from_probs(probs)
+                explain.setdefault("fragility", fragility)
+            except Exception:
+                fragility = None
             cfg = self._decision_gate_cfg()
             explain["decision_gate_config"] = "tuned" if isinstance(cfg, dict) and isinstance(cfg.get("thresholds"), dict) else "static"
             th0 = select_thresholds(str(championship), cfg)
@@ -530,7 +582,51 @@ class PredictionService:
             if adj:
                 explain["decision_gate_adjustments"] = {"chaos": adj}
 
-            explain["decision_gate"] = evaluate_decision(championship=str(championship), probs=probs, confidence=float(0.0), thresholds=th)
+            drift0 = explain.get("drift") if isinstance(explain, dict) else None
+            drift_level = drift0.get("level") if isinstance(drift0, dict) else None
+            decision = evaluate_decision(
+                championship=str(championship),
+                probs=probs,
+                confidence=float(0.0),
+                thresholds=th,
+                chaos=explain.get("chaos") if isinstance(explain, dict) else None,
+                fragility=fragility if isinstance(fragility, dict) else None,
+                drift_level=str(drift_level) if isinstance(drift_level, str) else None,
+            )
+            explain["decision_gate"] = decision
+            explain["decision"] = decision
+            try:
+                odds0 = ctx.get("odds") if isinstance(ctx, dict) else None
+                odds = odds0 if isinstance(odds0, dict) else None
+                if odds:
+                    def _od(k: str):
+                        v = odds.get(k)
+                        try:
+                            f = float(v)
+                            return f if f > 1e-9 else None
+                        except Exception:
+                            return None
+
+                    odds_map = {
+                        "home_win": _od("home_win") or _od("1"),
+                        "draw": _od("draw") or _od("X"),
+                        "away_win": _od("away_win") or _od("2"),
+                    }
+                    ev_rows: dict[str, dict[str, float | None]] = {}
+                    best: dict[str, float | str | None] | None = None
+                    for out, o in odds_map.items():
+                        if o is None:
+                            continue
+                        p = float(probs.get(out, 0.0) or 0.0)
+                        implied = 1.0 / o if o > 0 else None
+                        ev = p * o - 1.0
+                        ev_rows[out] = {"odds": o, "implied": implied, "ev": ev}
+                        if best is None or ev > float(best.get("ev") or -1e9):
+                            best = {"outcome": out, "odds": o, "implied": implied, "ev": ev}
+                    if ev_rows:
+                        explain["ev"] = {"markets": {"1x2": ev_rows}, "best": best}
+            except Exception:
+                pass
             return PredictionResult(probabilities=probs, explain=explain, confidence=0.0, ranges=None)
 
         rh = self._team_resolver.resolve(championship=str(championship), name=str(home_team))
@@ -698,12 +794,82 @@ class PredictionService:
             if adj:
                 explain["decision_gate_adjustments"] = {"chaos": adj}
 
-            explain["decision_gate"] = evaluate_decision(
+            fragility = explain.get("fragility") if isinstance(explain, dict) else None
+            drift0 = explain.get("drift") if isinstance(explain, dict) else None
+            drift_level = drift0.get("level") if isinstance(drift0, dict) else None
+            decision = evaluate_decision(
                 championship=str(championship),
                 probs=probs,
                 confidence=float(conf0 or 0.0),
                 thresholds=th,
+                chaos=explain.get("chaos") if isinstance(explain, dict) else None,
+                fragility=fragility if isinstance(fragility, dict) else None,
+                drift_level=str(drift_level) if isinstance(drift_level, str) else None,
             )
+            explain["decision_gate"] = decision
+            explain["decision"] = decision
+            ev_payload = None
+            try:
+                odds0 = ctx.get("odds") if isinstance(ctx, dict) else None
+                odds = odds0 if isinstance(odds0, dict) else None
+                if odds:
+                    def _od(k: str):
+                        v = odds.get(k)
+                        try:
+                            f = float(v)
+                            return f if f > 1e-9 else None
+                        except Exception:
+                            return None
+
+                    odds_map = {
+                        "home_win": _od("home_win") or _od("1"),
+                        "draw": _od("draw") or _od("X"),
+                        "away_win": _od("away_win") or _od("2"),
+                    }
+
+                    ev_rows: dict[str, dict[str, float | None]] = {}
+                    best: dict[str, float | str | None] | None = None
+                    for out, o in odds_map.items():
+                        if o is None:
+                            continue
+                        p = float(probs.get(out, 0.0) or 0.0)
+                        implied = 1.0 / o if o > 0 else None
+                        ev = p * o - 1.0
+                        ev_rows[out] = {"odds": o, "implied": implied, "ev": ev}
+                        if best is None or ev > float(best.get("ev") or -1e9):
+                            best = {"outcome": out, "odds": o, "implied": implied, "ev": ev}
+
+                    if ev_rows:
+                        ev_payload = {"markets": {"1x2": ev_rows}, "best": best}
+            except Exception:
+                ev_payload = None
+
+            if isinstance(ev_payload, dict):
+                explain["ev"] = ev_payload
+            try:
+                buckets = _load_similarity_buckets()
+                frag0 = explain.get("fragility") if isinstance(explain, dict) else None
+                frag_level = frag0.get("level") if isinstance(frag0, dict) else None
+                dg = explain.get("decision_gate") if isinstance(explain, dict) else None
+                tier0 = dg.get("confidence_tier") if isinstance(dg, dict) else None
+
+                key = {
+                    "championship": str(championship),
+                    "tier": str(tier0) if tier0 else "na",
+                    "chaos": _bucketize_chaos(float(chaos_index) if isinstance(chaos_index, (int, float)) else None),
+                    "fragility": _norm_fragility(str(frag_level) if isinstance(frag_level, str) else None),
+                }
+                k = f'{key["championship"]}|{key["tier"]}|{key["chaos"]}|{key["fragility"]}'
+                row = buckets.get(k) if isinstance(buckets, dict) else None
+                if isinstance(row, dict):
+                    acc = float(row.get("accuracy") or 0.0)
+                    n = int(row.get("n") or 0)
+                    if acc > 0 and n > 0:
+                        explain["similar_reliability_pct"] = round(acc * 100.0, 1)
+                        explain["similar_samples"] = n
+                        explain["similar_bucket_key"] = k
+            except Exception:
+                pass
             try:
                 data = self._load_backtest_metrics()
                 if isinstance(data, dict):
@@ -721,6 +887,13 @@ class PredictionService:
                                 "ece": row.get("ece"),
                                 "lookback_days": meta.get("lookback_days"),
                             }
+                            try:
+                                acc = float(row.get("accuracy") or 0.0)
+                                if acc > 0:
+                                    explain["context_reliability_pct"] = round(acc * 100.0, 1)
+                                    explain["context_window_days"] = int(meta.get("lookback_days") or 0)
+                            except Exception:
+                                pass
             except Exception:
                 pass
             return PredictionResult(
@@ -838,6 +1011,12 @@ class PredictionService:
         explain["degradation_level"] = int(deg.level)
         explain["warnings"] = list(deg.warnings)
         explain["team_name_resolution"] = team_name_resolution
+        fragility = None
+        try:
+            fragility = fragility_from_probs(probs)
+            explain.setdefault("fragility", fragility)
+        except Exception:
+            fragility = None
         chaos = compute_chaos(
             team_dynamics_payload=self._load_team_dynamics(),
             championship=str(championship),
@@ -873,7 +1052,11 @@ class PredictionService:
                     probs=probs,
                     confidence=float(conf or 0.0),
                     thresholds=th,
+                    chaos=explain.get("chaos") if isinstance(explain, dict) else None,
+                    fragility=fragility if isinstance(fragility, dict) else None,
+                    drift_level=str(drift_level) if isinstance(drift_level, str) else None,
                 )
+                explain["decision_gate"] = decision
                 explain["decision"] = decision
             except Exception:
                 pass
@@ -895,6 +1078,13 @@ class PredictionService:
                             "ece": row.get("ece"),
                             "lookback_days": meta.get("lookback_days"),
                         }
+                        try:
+                            acc = float(row.get("accuracy") or 0.0)
+                            if acc > 0:
+                                explain["context_reliability_pct"] = round(acc * 100.0, 1)
+                                explain["context_window_days"] = int(meta.get("lookback_days") or 0)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -932,10 +1122,6 @@ class PredictionService:
         except Exception:
             shap_like = None
         explain["why"] = shap_like
-        try:
-            explain.setdefault("fragility", fragility_from_probs(probs))
-        except Exception:
-            pass
         compare = explain.get("compare")
         if isinstance(compare, dict):
             summary = summarize_match_compare(compare, max_factors=3)

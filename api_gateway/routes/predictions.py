@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -13,6 +16,21 @@ from ml_engine.resilience.bulkheads import run_cpu
 
 
 router = APIRouter()
+
+
+PREDICTION_LOG_ENABLE = str(os.getenv("PREDICTION_LOG_ENABLE", "0")).strip() in {"1", "true", "yes", "on"}
+PREDICTION_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "prediction_events.jsonl")
+
+
+def _log_prediction_event(payload: dict[str, Any]) -> None:
+    if not PREDICTION_LOG_ENABLE:
+        return
+    try:
+        Path(PREDICTION_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(PREDICTION_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
 
 
 def _tenant_id_from_request(request: Request) -> str:
@@ -117,6 +135,23 @@ async def batch_predictions(req: BatchPredictionRequest, request: Request, respo
             pick = "home_win" if (p1 >= px and p1 >= p2) else "draw" if (px >= p1 and px >= p2) else "away_win"
             p_pick = float(probs.get(pick, 0.0) or 0.0)
             conf = float(result.confidence) if isinstance(result.confidence, (int, float)) else 0.0
+            dg = (result.explain or {}).get("decision_gate") if isinstance(result.explain, dict) else None
+            tier = dg.get("confidence_tier") if isinstance(dg, dict) else None
+            chaos = (result.explain or {}).get("chaos") if isinstance(result.explain, dict) else None
+            chaos_idx = chaos.get("index") if isinstance(chaos, dict) else None
+            frag = (result.explain or {}).get("fragility") if isinstance(result.explain, dict) else None
+            frag_level = frag.get("level") if isinstance(frag, dict) else None
+            _log_prediction_event({
+                "ts_utc": datetime.now(timezone.utc).isoformat(),
+                "match_id": str(live.match_id),
+                "championship": str(live.championship),
+                "tier": str(tier) if tier else None,
+                "chaos_index": chaos_idx,
+                "fragility_level": str(frag_level) if frag_level else None,
+                "probs": {"home_win": p1, "draw": px, "away_win": p2},
+                "pick": str(pick),
+                "confidence": float(conf),
+            })
             if conf < 0.0:
                 conf = 0.0
             if conf > 1.0:
@@ -134,7 +169,6 @@ async def batch_predictions(req: BatchPredictionRequest, request: Request, respo
             )
         except Exception:
             pass
-
         predictions.append(
             MatchPrediction(
                 match_id=live.match_id,

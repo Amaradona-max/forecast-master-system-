@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-02-01T18:32:24.959346+00:00",
-  "generated_at_unix": 1769970744.959349,
+  "generated_at_utc": "2026-02-01T20:18:44.460755+00:00",
+  "generated_at_unix": 1769977124.460758,
   "meta": {
     "model": "decision_gate_tuning_v2_trend_aware",
     "source_metrics": "data/backtest_metrics.json",

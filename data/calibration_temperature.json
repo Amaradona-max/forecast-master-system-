@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-02-01T18:32:24.953654+00:00",
-  "generated_at_unix": 1769970744.952492,
+  "generated_at_utc": "2026-02-01T20:18:44.456823+00:00",
+  "generated_at_unix": 1769977124.4561431,
   "meta": {
     "model": "temperature_scaling_multiclass_v1",
     "lookback_days": 60,

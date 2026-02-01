@@ -1,6 +1,6 @@
 {
-  "generated_at_unix": 1769970743.616281,
-  "generated_at_utc": "2026-02-01T18:32:23.616281+00:00",
+  "generated_at_unix": 1769977123.332528,
+  "generated_at_utc": "2026-02-01T20:18:43.332528+00:00",
   "meta": {
     "model": "team_dynamics_v1",
     "recent_kickoffs_limit": 25,
@@ -9,22 +9,22 @@
   "championships": {
     "serie_a": {
       "source": "football_data",
-      "asof_unix": 1769970743.616281,
+      "asof_unix": 1769977123.332528,
       "teams": {}
     },
     "premier_league": {
       "source": "football_data",
-      "asof_unix": 1769970743.616281,
+      "asof_unix": 1769977123.332528,
       "teams": {}
     },
     "la_liga": {
       "source": "football_data",
-      "asof_unix": 1769970743.616281,
+      "asof_unix": 1769977123.332528,
       "teams": {}
     },
     "bundesliga": {
       "source": "football_data",
-      "asof_unix": 1769970743.616281,
+      "asof_unix": 1769977123.332528,
       "teams": {}
     }
   }

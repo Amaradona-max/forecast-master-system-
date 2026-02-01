@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-02-01T18:32:24.956671+00:00",
-  "generated_at_unix": 1769970744.9558551,
+  "generated_at_utc": "2026-02-01T20:18:44.458824+00:00",
+  "generated_at_unix": 1769977124.45815,
   "meta": {
     "model": "backtest_metrics_v1",
     "lookback_days": 60,

@@ -4,7 +4,7 @@ import React from "react"
 
 type Badge = {
   label: string
-  kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces"
+  kind: "live" | "top" | "conf" | "rel_good" | "rel_mid" | "rel_bad" | "chaos" | "upset" | "territory" | "set_pieces" | "tier"
   tone?: "green" | "yellow" | "red" | "zinc" | "blue"
   title?: string
 }
@@ -52,6 +52,14 @@ export const WatchlistItem = React.memo(function WatchlistItem({
                 "rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide",
                 b.label === "NO BET"
                   ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                  : b.kind === "tier"
+                    ? b.tone === "green"
+                      ? "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : b.tone === "yellow"
+                        ? "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                        : b.tone === "zinc"
+                          ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+                          : "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
                   : b.kind === "upset"
                     ? "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
                   : b.kind === "territory"
