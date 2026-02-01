@@ -100,6 +100,26 @@ export type MultiMarketConfidenceResponse = {
   markets: Record<string, MarketConfidence>
 }
 
+export type ValuePickItem = {
+  match_id: string
+  championship: string
+  home_team: string
+  away_team: string
+  kickoff_unix?: number | null
+  market: string
+  success_pct: number
+  odds: number
+  implied_pct: number
+  value_index: number
+  value_level: "LOW" | "MEDIUM" | "HIGH"
+  source?: string | null
+}
+
+export type ValuePickResponse = {
+  generated_at_utc: string
+  items: ValuePickItem[]
+}
+
 export type UserProfile = {
   user_id: string
   profile: "PRUDENT" | "BALANCED" | "AGGRESSIVE"

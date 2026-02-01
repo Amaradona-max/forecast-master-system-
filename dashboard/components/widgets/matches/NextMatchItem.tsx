@@ -2,12 +2,17 @@
 
 import React from "react"
 
+import { BestPickBadge } from "@/components/widgets/BestPickBadge"
+import { HighConfidenceBadge } from "@/components/widgets/HighConfidenceBadge"
+
 type NextMatch = { home_team: string; away_team: string } & Record<string, unknown>
 
 export const NextMatchItem = React.memo(function NextMatchItem({
   m,
   matchKey,
   titleRight,
+  isTop,
+  isBest,
   onToggleWatch,
   watched,
   children
@@ -15,14 +20,19 @@ export const NextMatchItem = React.memo(function NextMatchItem({
   m: NextMatch
   matchKey: string
   titleRight?: React.ReactNode
+  isTop?: boolean
+  isBest?: boolean
   onToggleWatch: () => void
   watched: boolean
   children?: React.ReactNode
 }) {
+  const bestCls = isBest
+    ? "border-emerald-500/20 ring-1 ring-sky-500/25 dark:shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_0_18px_rgba(56,189,248,0.10)]"
+    : ""
   return (
     <section
       key={matchKey}
-      className="rounded-3xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25"
+      className={`rounded-2xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 ${bestCls}`}
     >
       <header className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
         <div className="min-w-0">
@@ -38,6 +48,13 @@ export const NextMatchItem = React.memo(function NextMatchItem({
 
         <div className="flex items-start justify-between gap-2 sm:justify-end">
           <div className="min-w-0">{titleRight}</div>
+          {isBest ? <BestPickBadge /> : null}
+          <HighConfidenceBadge prediction={m} />
+          {isTop ? (
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400">
+              TOP
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={onToggleWatch}

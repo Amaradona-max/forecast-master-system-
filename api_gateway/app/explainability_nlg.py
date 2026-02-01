@@ -73,3 +73,59 @@ def summarize_match_compare(compare: Dict[str, Any], *, max_factors: int = 3) ->
     if b_txt:
         return f"Match B risulta migliore perché {b_txt} fa la differenza."
     return None
+
+
+def summarize_match_compare_long(compare: Dict[str, Any], *, max_pos: int = 3, max_risk: int = 2) -> str | None:
+    if not isinstance(compare, dict):
+        return None
+    drivers = compare.get("drivers")
+    if not isinstance(drivers, list) or not drivers:
+        return None
+
+    rows = []
+    for d in drivers:
+        if not isinstance(d, dict):
+            continue
+        feat = d.get("feature")
+        imp = d.get("impact_pct")
+        win = d.get("winner")
+        if feat is None or imp is None or win not in ("A", "B"):
+            continue
+        try:
+            imp = float(imp)
+        except Exception:
+            continue
+        rows.append((str(feat), imp, str(win)))
+
+    if not rows:
+        return None
+
+    rows.sort(key=lambda x: x[1], reverse=True)
+
+    pro_a = [(_human_feature(f), imp) for f, imp, w in rows if w == "A"][:max_pos]
+    pro_b = [(_human_feature(f), imp) for f, imp, w in rows if w == "B"][:max_risk]
+
+    def _join(xs: List[tuple[str, float]]):
+        names = [x[0] for x in xs]
+        if not names:
+            return ""
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} e {names[1]}"
+        return f"{', '.join(names[:-1])} e {names[-1]}"
+
+    one = compare.get("summary_text")
+    if not isinstance(one, str) or not one.strip():
+        one = summarize_match_compare(compare, max_factors=max_pos) or "Match A è preferibile rispetto al Match B."
+
+    a_txt = _join(pro_a)
+    line2 = f"Il vantaggio è guidato soprattutto da {a_txt}." if a_txt else "Il vantaggio è guidato da fattori di forma e contesto."
+
+    b_txt = _join(pro_b)
+    if b_txt:
+        line3 = f"Rischio/contro: nel Match B incidono {b_txt}, che può ridurre il margine."
+    else:
+        line3 = "Rischio/contro: la differenza non è enorme, quindi serve prudenza se le quote sono basse."
+
+    return f"{one}\n{line2}\n{line3}"

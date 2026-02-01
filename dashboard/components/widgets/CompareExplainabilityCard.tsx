@@ -10,6 +10,7 @@ export type CompareExplainabilityDriver = {
 export type CompareExplainabilityPayload = {
   drivers: CompareExplainabilityDriver[]
   summary_text?: string | null
+  summary_long?: string | null
 } & Record<string, unknown>
 
 export function CompareExplainabilityCard({ compare }: { compare?: CompareExplainabilityPayload | null }) {
@@ -22,6 +23,11 @@ export function CompareExplainabilityCard({ compare }: { compare?: CompareExplai
 
       {compare.summary_text ? (
         <p className="mb-3 text-sm text-zinc-700 dark:text-zinc-200">{compare.summary_text}</p>
+      ) : null}
+      {compare.summary_long ? (
+        <div className="mb-3 whitespace-pre-line text-sm text-zinc-700 dark:text-zinc-200">
+          {compare.summary_long}
+        </div>
       ) : null}
 
       <div className="space-y-2">

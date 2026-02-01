@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api_gateway.app.explainability_compare import compare_shap_like
-from api_gateway.app.explainability_nlg import summarize_match_compare
+from api_gateway.app.explainability_nlg import summarize_match_compare, summarize_match_compare_long
+from api_gateway.app.fragility import fragility_from_probs
 from api_gateway.app.settings import settings
 from api_gateway.app.state import AppState
 from ml_engine.features.builder import build_features_1x2
@@ -107,6 +108,25 @@ class MultiMarketConfidenceResponse(BaseModel):
     match_id: str
     match: str
     markets: dict[str, MarketConfidence] = Field(default_factory=dict)
+
+class ValuePickItem(BaseModel):
+    match_id: str
+    championship: str
+    home_team: str
+    away_team: str
+    kickoff_unix: float | None = None
+    market: str
+    success_pct: float
+    odds: float
+    implied_pct: float
+    value_index: float
+    value_level: str
+    source: str | None = None
+
+
+class ValuePickResponse(BaseModel):
+    generated_at_utc: datetime
+    items: list[ValuePickItem] = Field(default_factory=list)
 
 
 def _championship_display_name(championship: str) -> str:
@@ -252,6 +272,17 @@ def _risk_from_confidence(confidence: int, quality: float) -> str:
         return "LOW"
     return "MEDIUM"
 
+def _market_prob(match: Any, market: str) -> float:
+    mk = str(market or "").strip().upper()
+    probs = match.probabilities if isinstance(getattr(match, "probabilities", None), dict) else {}
+    if mk in {"1", "HOME", "HOME_WIN", "H"}:
+        return float(probs.get("home_win", 0.0) or 0.0)
+    if mk in {"X", "DRAW", "D"}:
+        return float(probs.get("draw", 0.0) or 0.0)
+    if mk in {"2", "AWAY", "AWAY_WIN", "A"}:
+        return float(probs.get("away_win", 0.0) or 0.0)
+    return 0.0
+
 
 @router.get("/api/v1/insights/multi-market", response_model=MultiMarketConfidenceResponse)
 async def multi_market_confidence(request: Request, match_id: str) -> MultiMarketConfidenceResponse:
@@ -326,6 +357,99 @@ async def multi_market_confidence(request: Request, match_id: str) -> MultiMarke
         match=match_label,
         markets=markets,
     )
+
+
+@router.get("/api/v1/insights/value-pick", response_model=ValuePickResponse)
+async def value_pick_insight(request: Request, limit: int = 50, min_value_index: float | None = None) -> ValuePickResponse:
+    if not hasattr(request.app.state, "app_state"):
+        request.app.state.app_state = AppState()
+    state = request.app.state.app_state
+    tenant_id = _tenant_id_from_request(request)
+    tenant_row = await state.get_tenant_config(tenant_id=tenant_id)
+    tenant_cfg0 = tenant_row.get("config") if isinstance(tenant_row, dict) else None
+    tenant_cfg = tenant_cfg0 if isinstance(tenant_cfg0, dict) else {}
+    compliance = tenant_cfg.get("compliance") if isinstance(tenant_cfg.get("compliance"), dict) else {}
+    _apply_region_policy(request, compliance)
+
+    try:
+        lim = int(limit)
+    except Exception:
+        lim = 50
+    lim = max(1, min(500, lim))
+    min_idx = 8.0 if min_value_index is None else float(min_value_index)
+
+    odds_rows = await state.list_odds(limit=500)
+    matches = await state.list_matches()
+    matches_by_id = {str(m.match_id): m for m in matches}
+    filters = tenant_cfg.get("filters") if isinstance(tenant_cfg.get("filters"), dict) else {}
+    allowed_markets_raw = filters.get("active_markets")
+    allowed_markets = [str(x).strip().upper() for x in (allowed_markets_raw if isinstance(allowed_markets_raw, list) else []) if str(x).strip()]
+    allow_set = set(allowed_markets)
+    min_label = str(filters.get("min_confidence") or "LOW").strip().upper() or "LOW"
+
+    items: list[ValuePickItem] = []
+    for row in odds_rows:
+        mid = str(row.get("match_id") or "").strip()
+        mk = str(row.get("market") or "").strip()
+        odds = row.get("odds")
+        if not mid or not mk or not isinstance(odds, (int, float)):
+            continue
+        if float(odds) <= 1.01:
+            continue
+        m = matches_by_id.get(mid)
+        if m is None:
+            continue
+        if str(getattr(m, "status", "") or "").upper() == "FINISHED":
+            continue
+        if allow_set:
+            mk_up = str(mk).upper()
+            ok = mk_up in allow_set
+            if not ok and "1X2" in allow_set and mk_up in {"1", "X", "2", "HOME", "AWAY", "DRAW", "HOME_WIN", "AWAY_WIN", "D", "H", "A"}:
+                ok = True
+            if not ok:
+                continue
+        p = _market_prob(m, mk)
+        if p <= 0:
+            continue
+        p01 = _clamp01(float(p))
+        success_pct = 100.0 * p01
+        best_prob = max(
+            _clamp01(float(getattr(m, "probabilities", {}).get("home_win", 0.0) or 0.0)),
+            _clamp01(float(getattr(m, "probabilities", {}).get("draw", 0.0) or 0.0)),
+            _clamp01(float(getattr(m, "probabilities", {}).get("away_win", 0.0) or 0.0)),
+        )
+        conf_pct = int(round(best_prob * 100.0))
+        if not _min_conf_ok(confidence_pct=int(conf_pct), min_label=min_label):
+            continue
+        implied_pct = 100.0 / float(odds)
+        value_index = float(success_pct) - float(implied_pct)
+        if value_index < float(min_idx):
+            continue
+        if value_index >= 12.0:
+            level = "HIGH"
+        elif value_index >= 8.0:
+            level = "MEDIUM"
+        else:
+            level = "LOW"
+        items.append(
+            ValuePickItem(
+                match_id=str(mid),
+                championship=str(getattr(m, "championship", "")),
+                home_team=str(getattr(m, "home_team", "")),
+                away_team=str(getattr(m, "away_team", "")),
+                kickoff_unix=float(getattr(m, "kickoff_unix", 0.0) or 0.0) if getattr(m, "kickoff_unix", None) is not None else None,
+                market=str(mk),
+                success_pct=round(float(success_pct), 1),
+                odds=float(odds),
+                implied_pct=round(float(implied_pct), 1),
+                value_index=round(float(value_index), 1),
+                value_level=str(level),
+                source=str(row.get("source") or "") or None,
+            )
+        )
+    items.sort(key=lambda x: (-float(x.value_index), float(x.kickoff_unix or 0.0)))
+    items = items[:lim]
+    return ValuePickResponse(generated_at_utc=datetime.now(timezone.utc), items=items)
 
 
 def _read_ratings() -> dict[str, dict[str, float]]:
@@ -423,6 +547,8 @@ class ComparePayload(BaseModel):
     confidence_a: float
     confidence_b: float
     summary_text: str | None = None
+    summary_long: str | None = None
+    fragility: dict[str, Any] | None = None
     drivers: list[CompareDriver] = Field(default_factory=list)
 
 
@@ -763,9 +889,25 @@ async def explain_compare(request: Request, match_a: str, match_b: str, target: 
     )
     if not isinstance(compare, dict):
         raise HTTPException(status_code=503, detail="compare_unavailable")
+    try:
+        fa = fragility_from_probs(probs_a_dict)
+        fb = fragility_from_probs(probs_b_dict)
+        compare.setdefault(
+            "fragility",
+            {
+                "a": {"score": fa["score"], "level": fa["level"]},
+                "b": {"score": fb["score"], "level": fb["level"]},
+                "winner": "A" if fa["score"] < fb["score"] else "B",
+            },
+        )
+    except Exception:
+        pass
     summary = summarize_match_compare(compare, max_factors=3)
     if summary:
         compare["summary_text"] = summary
+    summary_long = summarize_match_compare_long(compare, max_pos=3, max_risk=2)
+    if summary_long:
+        compare["summary_long"] = summary_long
 
     prob_key = _target_for_probs(target_key)
     prob_a = float(probs_a_dict.get(prob_key, 0.0) or 0.0)
@@ -773,6 +915,7 @@ async def explain_compare(request: Request, match_a: str, match_b: str, target: 
     conf_a = float(_confidence_from_probs(probs_a_dict))
     conf_b = float(_confidence_from_probs(probs_b_dict))
     summary_text = compare.get("summary_text") if isinstance(compare.get("summary_text"), str) else None
+    summary_long = compare.get("summary_long") if isinstance(compare.get("summary_long"), str) else None
 
     return CompareResponse(
         compare=ComparePayload(
@@ -784,6 +927,8 @@ async def explain_compare(request: Request, match_a: str, match_b: str, target: 
             confidence_a=round(conf_a, 4),
             confidence_b=round(conf_b, 4),
             summary_text=summary_text,
+            summary_long=summary_long,
+            fragility=compare.get("fragility") if isinstance(compare.get("fragility"), dict) else None,
             drivers=[CompareDriver(**d) for d in (compare.get("drivers") or []) if isinstance(d, dict)],
         )
     )

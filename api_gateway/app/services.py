@@ -22,6 +22,8 @@ from api_gateway.app.calibration_temperature import apply_temperature
 from api_gateway.app.decision_gate import adjust_thresholds_for_chaos, evaluate_decision, load_tuned_thresholds, select_thresholds
 from api_gateway.app.settings import settings
 from api_gateway.app.explainability import compute_shap_like
+from api_gateway.app.fragility import fragility_from_probs
+from api_gateway.app.explainability_nlg import summarize_match_compare, summarize_match_compare_long
 from api_gateway.app.team_name_resolver import TeamNameResolver
 from api_gateway.app.team_name_resolver import canonicalize
 
@@ -650,6 +652,19 @@ class PredictionService:
             except Exception:
                 shap_like = None
             explain["why"] = shap_like
+            try:
+                explain.setdefault("fragility", fragility_from_probs(probs))
+            except Exception:
+                pass
+            compare = explain.get("compare")
+            if isinstance(compare, dict):
+                summary = summarize_match_compare(compare, max_factors=3)
+                if summary:
+                    compare["summary_text"] = summary
+                summary_long = summarize_match_compare_long(compare, max_pos=3, max_risk=2)
+                if summary_long:
+                    compare["summary_long"] = summary_long
+                explain["compare"] = compare
             deg = build_degradation(cache_disabled=False, calibration_disabled=False, deadline_low=deadline_low)
             explain["degradation_level"] = int(deg.level)
             explain["warnings"] = list(deg.warnings)
@@ -917,6 +932,19 @@ class PredictionService:
         except Exception:
             shap_like = None
         explain["why"] = shap_like
+        try:
+            explain.setdefault("fragility", fragility_from_probs(probs))
+        except Exception:
+            pass
+        compare = explain.get("compare")
+        if isinstance(compare, dict):
+            summary = summarize_match_compare(compare, max_factors=3)
+            if summary:
+                compare["summary_text"] = summary
+            summary_long = summarize_match_compare_long(compare, max_pos=3, max_risk=2)
+            if summary_long:
+                compare["summary_long"] = summary_long
+            explain["compare"] = compare
 
         out = PredictionResult(probabilities=probs, explain=explain, confidence=float(conf) if conf is not None else None, ranges=ranges)
 

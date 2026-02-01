@@ -3,6 +3,7 @@
 import { useMemo } from "react"
 
 import { Card } from "@/components/widgets/Card"
+import { FragilityBadge, type Fragility } from "@/components/widgets/FragilityBadge"
 
 type OverviewMatch = {
   match_id: string
@@ -50,6 +51,13 @@ function chaosFromExplain(explain?: Record<string, unknown>) {
   const flags0 = chaos.flags
   const flags = Array.isArray(flags0) ? flags0.map((x) => String(x)) : []
   return { idx: Number.isFinite(idx) ? idx : 50, upset, flags }
+}
+
+function fragilityFromExplain(explain?: Record<string, unknown>): Fragility | null {
+  const frag0 = explain?.fragility
+  if (!frag0 || typeof frag0 !== "object") return null
+  const frag = frag0 as Record<string, unknown>
+  return { level: String(frag.level ?? "") }
 }
 
 function fmtKickoff(unix: number | null | undefined) {
@@ -259,6 +267,8 @@ export function PronosticiPicks({
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass("zinc")}`}>
                             Conf {Math.round(clamp01(Number(m.confidence ?? 0)) * 100)}%
                           </span>
+
+                          <FragilityBadge fragility={fragilityFromExplain(m.explain)} />
                         </div>
                       </div>
 

@@ -8,7 +8,8 @@ import type {
   TeamsToPlayResponse,
   TrackRecordResponse,
   UserProfile,
-  UserProfileUpdate
+  UserProfileUpdate,
+  ValuePickResponse
 } from "@/components/api/types"
 
 let apiDisabledUntil = 0
@@ -184,6 +185,16 @@ export async function fetchExplainMatch(matchId: string): Promise<ExplainRespons
 export async function fetchMultiMarketConfidence(matchId: string): Promise<MultiMarketConfidenceResponse> {
   const res = await apiFetchTenant(`/api/v1/insights/multi-market?match_id=${encodeURIComponent(matchId)}`, { cache: "default" })
   if (!res.ok) throw new Error(`multi_market_failed:${res.status}`)
+  return res.json()
+}
+
+export async function fetchValuePicks(params?: { limit?: number; min_value_index?: number }): Promise<ValuePickResponse> {
+  const qs = new URLSearchParams()
+  if (params?.limit) qs.set("limit", String(params.limit))
+  if (params?.min_value_index !== undefined) qs.set("min_value_index", String(params.min_value_index))
+  const tail = qs.toString()
+  const res = await apiFetchTenant(`/api/v1/insights/value-pick${tail ? `?${tail}` : ""}`, { cache: "default" })
+  if (!res.ok) throw new Error(`value_pick_failed:${res.status}`)
   return res.json()
 }
 

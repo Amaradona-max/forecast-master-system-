@@ -3,6 +3,8 @@
 import React from "react"
 
 import { PredictionBar } from "@/components/ui/PredictionBar"
+import { BestPickBadge } from "@/components/widgets/BestPickBadge"
+import { HighConfidenceBadge } from "@/components/widgets/HighConfidenceBadge"
 
 type MatchLite = {
   match_id: string
@@ -24,6 +26,8 @@ export const MatchRow = React.memo(function MatchRow({
   p1,
   px,
   p2,
+  isTop,
+  isBest,
   watched,
   onToggleWatch,
   rightSlot
@@ -32,12 +36,17 @@ export const MatchRow = React.memo(function MatchRow({
   p1: number
   px: number
   p2: number
+  isTop?: boolean
+  isBest?: boolean
   watched: boolean
   onToggleWatch: () => void
   rightSlot?: React.ReactNode
 }) {
+  const bestCls = isBest
+    ? "border-emerald-500/20 ring-1 ring-sky-500/25 dark:shadow-[0_0_0_1px_rgba(16,185,129,0.20),0_0_14px_rgba(56,189,248,0.08)]"
+    : ""
   return (
-    <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/10 bg-white/10 p-3 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 sm:grid-cols-[1.2fr_1fr_auto] sm:items-center">
+    <div className={`grid grid-cols-1 gap-3 rounded-2xl border border-white/10 bg-white/10 p-3 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 sm:grid-cols-[1.2fr_1fr_auto] sm:items-center ${bestCls}`}>
       <div className="min-w-0">
         <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-zinc-500 dark:text-zinc-400">Match</div>
         <div className="mt-1 text-sm font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -59,6 +68,13 @@ export const MatchRow = React.memo(function MatchRow({
 
       <div className="flex items-center justify-between gap-2 sm:justify-end">
         <div className="hidden sm:block">{rightSlot}</div>
+        {isBest ? <BestPickBadge /> : null}
+        <HighConfidenceBadge prediction={m} />
+        {isTop ? (
+          <span className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400">
+            TOP
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={onToggleWatch}

@@ -3,7 +3,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 
-import type { ExplainResponse, MultiMarketConfidenceResponse, TeamToPlay, TeamsToPlayResponse, TenantConfig, TrackRecordResponse, UserProfile } from "@/components/api/types"
+import type { ExplainResponse, MultiMarketConfidenceResponse, TeamToPlay, TeamsToPlayResponse, TenantConfig, TrackRecordResponse, UserProfile, ValuePickResponse } from "@/components/api/types"
 import {
   apiFetchTenant,
   fetchTenantConfig,
@@ -11,6 +11,7 @@ import {
   fetchExplainMatch,
   fetchExplainTeam,
   fetchMultiMarketConfidence,
+  fetchValuePicks,
   fetchSeasonProgress,
   fetchTeamsToPlay,
   fetchTrackRecord,
@@ -19,12 +20,19 @@ import {
   updateUserProfile
 } from "@/components/api/client"
 import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
+import { BestCountsHeader } from "@/components/widgets/BestCountsHeader"
 import { Card } from "@/components/widgets/Card"
+import { BestFirstToggle } from "@/components/widgets/BestFirstToggle"
 import { ChaosInsights } from "@/components/widgets/ChaosInsights"
 import { ChaosLeaderboard } from "@/components/widgets/ChaosLeaderboard"
 import { ExplainabilityCard } from "@/components/widgets/ExplainabilityCard"
+import { isBestPick, isHighConfidence, isTopPick } from "@/components/widgets/bestPick"
+import { FragilityBadge, type Fragility } from "@/components/widgets/FragilityBadge"
+import { FragilityThresholdSlider } from "@/components/widgets/FragilityThresholdSlider"
+import { HighConfidenceToggle } from "@/components/widgets/HighConfidenceToggle"
 import { LeaguePerformanceTable } from "@/components/widgets/LeaguePerformanceTable"
 import { PronosticiPicks } from "@/components/widgets/PronosticiPicks"
+import { TopPickToggle } from "@/components/widgets/TopPickToggle"
 import { NextMatchItem } from "@/components/widgets/matches/NextMatchItem"
 import { MatchRow } from "@/components/widgets/matches/MatchRow"
 import { WatchlistItem } from "@/components/widgets/watchlist/WatchlistItem"
@@ -118,6 +126,18 @@ function fmtPct100(x: number) {
   if (!Number.isFinite(n)) return "n/d"
   const v = n < 0 ? 0 : n > 100 ? 100 : n
   return `${v.toFixed(1)}%`
+}
+
+function fragilityFromExplain(explain?: Record<string, unknown>): Fragility | null {
+  const frag0 = explain?.fragility
+  if (!frag0 || typeof frag0 !== "object") return null
+  const frag = frag0 as Record<string, unknown>
+  return {
+    level: String(frag.level ?? ""),
+    score: typeof frag.score === "number" ? frag.score : null,
+    margin: typeof frag.margin === "number" ? frag.margin : null,
+    entropy: typeof frag.entropy === "number" ? frag.entropy : null
+  }
 }
 
 function fmtSigned(x: number) {
@@ -392,6 +412,13 @@ export function StatisticalPredictionsDashboard() {
 
   const [watchlist, setWatchlist] = useLocalStorage<WatchItem[]>("fm_watchlist_v1", [])
   const [density, setDensity] = useLocalStorage<"comfort" | "compact">("fm_density", "comfort")
+  const [topOnly, setTopOnly] = useLocalStorage<boolean>("fm_top_only", false)
+  const [topFragilityMax, setTopFragilityMax] = useLocalStorage<number>("fm_top_fragility_max", 0.55)
+  const [highConfOnly, setHighConfOnly] = useLocalStorage<boolean>("fm_high_conf_only", false)
+  const [bestFirst, setBestFirst] = useLocalStorage<boolean>("fm_best_first", true)
+  const TOP_MIN = 0.4
+  const TOP_MAX = 0.7
+  const topMax = Math.min(TOP_MAX, Math.max(TOP_MIN, Number(topFragilityMax || 0.55)))
   const [overview, setOverview] = useState<ChampionshipOverview[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [systemStatus, setSystemStatus] = useState<{ data_provider: string; data_error?: string | null; football_data_key_present: boolean; api_football_key_present: boolean } | null>(null)
@@ -404,6 +431,8 @@ export function StatisticalPredictionsDashboard() {
   const [leagueTrends, setLeagueTrends] = useState<Record<string, unknown>>({})
   const [teamsToPlay, setTeamsToPlay] = useState<TeamsToPlayResponse | null>(null)
   const [teamsToPlayError, setTeamsToPlayError] = useState<string | null>(null)
+  const [valuePicks, setValuePicks] = useState<ValuePickResponse | null>(null)
+  const [valuePicksError, setValuePicksError] = useState<string | null>(null)
   const [trackDays, setTrackDays] = useState<number>(120)
   const [trackRecord, setTrackRecord] = useState<TrackRecordResponse | null>(null)
   const [trackError, setTrackError] = useState<string | null>(null)
@@ -699,6 +728,13 @@ export function StatisticalPredictionsDashboard() {
     if (tone === "red") return "border-red-500/20 bg-red-500/15 text-red-700 dark:bg-red-500/25 dark:text-red-300"
     if (tone === "blue") return "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:bg-sky-500/25 dark:text-sky-300"
     return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:bg-zinc-500/20 dark:text-zinc-300"
+  }
+
+  const valueTone = (level: string) => {
+    const v = String(level || "").toUpperCase()
+    if (v === "HIGH") return "green"
+    if (v === "MEDIUM") return "yellow"
+    return "zinc"
   }
 
   type Pick = { key: string; label: string; prob: number }
@@ -1202,6 +1238,29 @@ export function StatisticalPredictionsDashboard() {
 
   useEffect(() => {
     let active = true
+    async function loadValuePicks() {
+      if (!pageVisible) return
+      try {
+        const res = await fetchValuePicks({ limit: 12, min_value_index: 8 })
+        if (!active) return
+        setValuePicks(res)
+        setValuePicksError(null)
+      } catch (e) {
+        if (!active) return
+        setValuePicksError(String((e as Error)?.message ?? e))
+        setValuePicks(null)
+      }
+    }
+    loadValuePicks()
+    const t = window.setInterval(loadValuePicks, 60_000)
+    return () => {
+      active = false
+      window.clearInterval(t)
+    }
+  }, [pageVisible])
+
+  useEffect(() => {
+    let active = true
     async function loadTrackRecord() {
       try {
         const res = await fetchTrackRecord(selectedChamp, trackDays)
@@ -1344,8 +1403,15 @@ export function StatisticalPredictionsDashboard() {
   }, [hideNoBet, isNoBet, onlyGood, qualityScore])
 
   const filteredBaseToPlay = useMemo(() => {
-    return (focusMode ? visibleToPlayFiltered : visibleToPlay).filter(passesDecisionFilters)
-  }, [focusMode, passesDecisionFilters, visibleToPlay, visibleToPlayFiltered])
+    let base = (focusMode ? visibleToPlayFiltered : visibleToPlay).filter(passesDecisionFilters)
+    if (topOnly) {
+      base = base.filter((m) => isTopPick(m as Record<string, unknown> | null | undefined, topMax))
+    }
+    if (highConfOnly) {
+      base = base.filter((m) => isHighConfidence(m as Record<string, unknown> | null | undefined))
+    }
+    return base
+  }, [focusMode, highConfOnly, passesDecisionFilters, topMax, topOnly, visibleToPlay, visibleToPlayFiltered])
 
   const filteredToPlay = useMemo(() => {
     const q = String(deferredMatchQuery ?? "").trim().toLowerCase()
@@ -1353,16 +1419,35 @@ export function StatisticalPredictionsDashboard() {
     return filteredBaseToPlay.filter((m) => `${m.home_team} ${m.away_team}`.toLowerCase().includes(q))
   }, [deferredMatchQuery, filteredBaseToPlay])
 
-  const nextMatches = useMemo(() => {
+  const nextMatchesData = useMemo(() => {
     const list = filteredToPlay.slice()
     list.sort((a, b) => {
       if (sortMode === "kickoff") return Number(a.kickoff_unix ?? 0) - Number(b.kickoff_unix ?? 0)
       if (sortMode === "confidence") return Number(b.confidence ?? 0) - Number(a.confidence ?? 0)
       return bestProb(b) - bestProb(a)
     })
-    const filtered = list.filter(passesDecisionFilters)
-    return filtered.slice(0, 12)
-  }, [filteredToPlay, passesDecisionFilters, sortMode])
+    let view = list.filter(passesDecisionFilters)
+    if (bestFirst) {
+      view = view
+        .map((p, idx) => {
+          const best = isBestPick(p as Record<string, unknown> | null | undefined, topMax)
+          const top = isTopPick(p as Record<string, unknown> | null | undefined, topMax)
+          const rank = best ? 0 : top ? 1 : 2
+          return { p, idx, rank }
+        })
+        .sort((a, b) => (a.rank - b.rank) || (a.idx - b.idx))
+        .map((x) => x.p)
+    }
+    const bestCount = view.reduce(
+      (acc, p) => acc + (isBestPick(p as Record<string, unknown> | null | undefined, topMax) ? 1 : 0),
+      0
+    )
+    const topCount = view.reduce(
+      (acc, p) => acc + (isTopPick(p as Record<string, unknown> | null | undefined, topMax) ? 1 : 0),
+      0
+    )
+    return { items: view.slice(0, 12), bestCount, topCount }
+  }, [bestFirst, filteredToPlay, passesDecisionFilters, sortMode, topMax])
 
   const stats = useMemo(() => derivedStats(visibleToPlay), [visibleToPlay])
   const trend = useMemo(() => probabilityTrend(matchdays), [matchdays])
@@ -1739,6 +1824,10 @@ export function StatisticalPredictionsDashboard() {
         }
         right={
           <>
+            <TopPickToggle value={topOnly} onChange={setTopOnly} />
+            {topOnly ? <FragilityThresholdSlider value={topMax} onChange={setTopFragilityMax} /> : null}
+            <HighConfidenceToggle value={highConfOnly} onChange={setHighConfOnly} />
+            <BestFirstToggle value={bestFirst} onChange={setBestFirst} />
             <DensityToggle value={density} onChange={setDensity} />
             {settingsButton}
           </>
@@ -2356,8 +2445,9 @@ export function StatisticalPredictionsDashboard() {
 
             {pronosticiView === "all" ? (
             <div className="mt-4 space-y-3">
-              {nextMatches.length ? (
-                nextMatches.map((m) => {
+              <BestCountsHeader bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} showHint />
+              {nextMatchesData.items.length ? (
+                nextMatchesData.items.map((m) => {
                   const p1 = safeProb(m, "home_win")
                   const px = safeProb(m, "draw")
                   const p2 = safeProb(m, "away_win")
@@ -2365,6 +2455,8 @@ export function StatisticalPredictionsDashboard() {
                   const { best: bestPick } = topTwoPicks(mWithP)
                   const kickoffLabel = formatKickoff(m.kickoff_unix)
                   const open = expandedMatchId === m.match_id
+                  const isTop = isTopPick(m as Record<string, unknown> | null | undefined, topMax)
+                  const isBest = isBestPick(m as Record<string, unknown> | null | undefined, topMax)
                   const watched = isWatched(m)
                   const conf = confidenceLabel(Number(m.confidence ?? 0))
                   const risk = matchRisk(m)
@@ -2463,6 +2555,8 @@ export function StatisticalPredictionsDashboard() {
                       p1={p1}
                       px={px}
                       p2={p2}
+                      isTop={isTop}
+                      isBest={isBest}
                       watched={watched}
                       onToggleWatch={() => onToggleWatch(m)}
                       rightSlot={titleRight}
@@ -2472,6 +2566,8 @@ export function StatisticalPredictionsDashboard() {
                       key={m.match_id}
                       m={m}
                       matchKey={matchId(m)}
+                      isTop={isTop}
+                      isBest={isBest}
                       watched={watched}
                       onToggleWatch={() => onToggleWatch(m)}
                       titleRight={titleRight}
@@ -2544,6 +2640,10 @@ export function StatisticalPredictionsDashboard() {
                           </span>
                         ) : null}
                       </div>
+                      {(() => {
+                        const explain = (m as { explain?: Record<string, unknown> } | null | undefined)?.explain
+                        return <FragilityBadge fragility={fragilityFromExplain(explain)} />
+                      })()}
                       <PredictionBar p1={p1} px={px} p2={p2} className="mt-3" />
                       {(() => {
                         const obj = m as { explain?: unknown } | null | undefined
@@ -2804,6 +2904,79 @@ export function StatisticalPredictionsDashboard() {
         </div>
 
         <div className="lg:col-span-3 space-y-4">
+          <Card className="!bg-white/80 !p-4 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.85),rgba(30,41,59,0.55))]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Value Picks</div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title="implied = 1/odds · value_index = success - implied"
+                  >
+                    Successo vs quota <span className="text-[11px] text-zinc-500 dark:text-zinc-400">ⓘ</span>
+                  </span>
+                </div>
+              </div>
+              <div className="shrink-0 text-right text-[11px] text-zinc-600 dark:text-zinc-300">
+                {valuePicks?.generated_at_utc ? new Date(String(valuePicks.generated_at_utc)).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : ""}
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {valuePicks?.items?.length ? (
+                [...valuePicks.items]
+                  .slice()
+                  .sort((a, b) => Number(b.value_index ?? 0) - Number(a.value_index ?? 0))
+                  .map((v, idx) => {
+                    const kickoffLabel = formatKickoff(v.kickoff_unix)
+                    return (
+                      <div
+                        key={`${v.match_id}-${v.market}-${idx}`}
+                        className="rounded-2xl border border-white/10 bg-white/10 px-3 py-3 backdrop-blur-md dark:bg-zinc-950/20"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                              {v.home_team} <span className="text-zinc-400">vs</span> {v.away_team}
+                            </div>
+                            <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                              {CHAMP_LABELS[String(v.championship ?? "").toLowerCase()] ?? v.championship} {kickoffLabel ? `· ${kickoffLabel}` : ""}
+                            </div>
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(valueTone(String(v.value_level ?? "")) as "green" | "yellow" | "red" | "zinc" | "blue")}`}>
+                              VALUE {String(v.value_level || "").toUpperCase()}
+                            </span>
+                            <div className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-semibold text-zinc-900 dark:bg-zinc-950/15 dark:text-zinc-50">
+                              {fmtSigned(Number(v.value_index ?? 0))}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+                          <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
+                            Market {String(v.market ?? "").toUpperCase()}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
+                            Quota {Number(v.odds ?? 0).toFixed(2)}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
+                            Implied {fmtPct100(Number(v.implied_pct ?? 0))}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-950/15 dark:text-zinc-200">
+                            Success {fmtPct100(Number(v.success_pct ?? 0))}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })
+              ) : valuePicksError ? (
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">{valuePicksError}</div>
+              ) : (
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">n/d</div>
+              )}
+            </div>
+          </Card>
+
           <Card className="!bg-white/80 !p-4 dark:!bg-[linear-gradient(135deg,rgba(15,23,42,0.85),rgba(30,41,59,0.55))]">
             <div className="flex items-start justify-between gap-3">
               <div>
