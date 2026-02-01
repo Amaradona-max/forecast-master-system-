@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
+import Image from "next/image"
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 
 import type { ExplainResponse, MultiMarketConfidenceResponse, TeamToPlay, TeamsToPlayResponse, TenantConfig, TrackRecordResponse, UserProfile, ValuePickResponse } from "@/components/api/types"
 import {
@@ -1778,9 +1779,11 @@ export function StatisticalPredictionsDashboard() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex items-center gap-3">
             {brandLogoUrl ? (
-              <img
+              <Image
                 src={brandLogoUrl}
                 alt={brandName}
+                width={32}
+                height={32}
                 className="h-8 w-8 rounded-lg border border-white/10 bg-white/10 object-cover"
               />
             ) : null}
