@@ -3,7 +3,8 @@
 import { useMemo } from "react"
 
 import { Card } from "@/components/widgets/Card"
-import { MatchCard, type OverviewMatch } from "@/components/widgets/MatchCard"
+import { type OverviewMatch } from "@/components/widgets/MatchCard"
+import { FragilityBadge, type Fragility } from "@/components/widgets/FragilityBadge"
 
 type Mode = "play" | "recover"
 
@@ -38,6 +39,34 @@ function chaosFromExplain(explain?: Record<string, unknown>) {
   const flags0 = chaos.flags
   const flags = Array.isArray(flags0) ? flags0.map((x) => String(x)) : []
   return { idx: Number.isFinite(idx) ? idx : 50, upset, flags }
+}
+
+function fragilityFromExplain(explain?: Record<string, unknown>): Fragility | null {
+  const frag0 = explain?.fragility
+  if (!frag0 || typeof frag0 !== "object") return null
+  const frag = frag0 as Record<string, unknown>
+  return { level: String(frag.level ?? "") }
+}
+
+function fmtKickoff(k: number | null) {
+  if (!k) return "n/d"
+  const d = new Date(k * 1000)
+  return d.toLocaleString(undefined, { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+}
+
+function pillClass(tone: "green" | "yellow" | "red" | "blue" | "zinc") {
+  if (tone === "green") return "border-emerald-500/20 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+  if (tone === "yellow") return "border-amber-500/20 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+  if (tone === "red") return "border-red-500/20 bg-red-500/15 text-red-700 dark:text-red-300"
+  if (tone === "blue") return "border-sky-500/20 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+  return "border-zinc-500/20 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300"
+}
+
+function chaosBadge(idx: number) {
+  if (idx >= 85) return { label: "CHAOS🔥", tone: "red" as const }
+  if (idx >= 70) return { label: "CHAOS↑", tone: "yellow" as const }
+  if (idx >= 55) return { label: "CHAOS", tone: "blue" as const }
+  return { label: "CHAOS", tone: "zinc" as const }
 }
 
 function isPlayableBase(m: OverviewMatch) {
@@ -157,6 +186,24 @@ export function PronosticiPicks({
     return rows
   }, [matches, mode])
 
+  const allPicks = useMemo(() => {
+    const out: Array<{ championship: string; label: string; pick: PickRow }> = []
+    grouped.forEach(({ championship, picks }) => {
+      const label = champLabels?.[championship] ?? championship
+      picks.forEach((pick) => out.push({ championship, label, pick }))
+    })
+    return out.sort((a, b) => {
+      const ak = a.pick.kind === "LOW" || a.pick.kind === "PLAY" ? 0 : 1
+      const bk = b.pick.kind === "LOW" || b.pick.kind === "PLAY" ? 0 : 1
+      if (ak !== bk) return ak - bk
+      if (b.pick.bestProb !== a.pick.bestProb) return b.pick.bestProb - a.pick.bestProb
+      return a.pick.chaos - b.pick.chaos
+    })
+  }, [grouped, champLabels])
+
+  const featured = useMemo(() => allPicks.slice(0, 2), [allPicks])
+  const rest = useMemo(() => allPicks.slice(2), [allPicks])
+
   return (
     <Card className="mt-4">
       <div>
@@ -170,47 +217,248 @@ export function PronosticiPicks({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
-        {grouped.map(({ championship, picks }) => {
-          const label = champLabels?.[championship] ?? championship
+      <div className="mt-4 bento-grid">
+        {featured.map(({ label, pick }) => {
+          const m = pick.match
+          const cb = chaosBadge(pick.chaos)
+          const kindTone = pick.kind === "LOW" || pick.kind === "PLAY" ? "green" : "red"
           return (
-            <div
-              key={championship}
-              className="rounded-3xl border border-zinc-200/70 bg-white/55 p-3 dark:border-zinc-800/70 dark:bg-zinc-950/25"
+            <button
+              key={String(m.match_id)}
+              type="button"
+              onClick={() => onOpenMatch(String(m.match_id))}
+              className="bento-col-8 card-wow text-left hover:shadow-medium"
+              title="Click per aprire i dettagli (Explain)"
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{label}</div>
-                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
-                  {picks.length ? `${picks.length} pick` : "n/d"}
-                </span>
-              </div>
-
-              <div className="mt-2 space-y-2">
-                {picks.map((p) => {
-                  const kindTone = p.kind === "LOW" || p.kind === "PLAY" ? "green" : "red"
-                  return (
-                    <MatchCard
-                      key={p.match.match_id}
-                      match={p.match}
-                      label={p.kind === "PLAY" ? "PLAY" : p.kind}
-                      labelTone={kindTone}
-                      chaosIndex={p.chaos}
-                      upsetWatch={p.upset}
-                      why={p.why}
-                      onOpen={onOpenMatch}
-                    />
-                  )
-                })}
-
-                {!picks.length ? (
-                  <div className="text-xs text-zinc-600 dark:text-zinc-300">
-                    Nessuna selezione disponibile con i filtri attuali (es. Chaos alto o confidence bassa).
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{label}</div>
+                  <div className="mt-1 text-base font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    {m.home_team} <span className="text-zinc-400">vs</span> {m.away_team}
                   </div>
-                ) : null}
+                  <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{fmtKickoff(m.kickoff_unix ?? null)}</div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${pillClass(kindTone)}`}>
+                    {pick.kind === "PLAY" ? "PLAY" : pick.kind}
+                  </span>
+                  <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${pillClass(cb.tone)}`}>
+                    {cb.label}
+                  </span>
+                  {pick.upset ? (
+                    <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${pillClass("red")}`}>UPSET</span>
+                  ) : null}
+                  <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${pillClass("zinc")}`}>
+                    Best {Math.round(pick.bestProb * 100)}%
+                  </span>
+                  <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${pillClass("zinc")}`}>
+                    Conf {Math.round(clamp01(Number(m.confidence ?? 0)) * 100)}%
+                  </span>
+                  <FragilityBadge fragility={fragilityFromExplain(m.explain)} />
+                </div>
               </div>
-            </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Perché</div>
+                  <div className="mt-1 line-clamp-3">
+                    {pick.why?.length ? `• ${pick.why.slice(0, 3).join(" • ")}` : "• segnali standard"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Riepilogo</div>
+                  <div className="mt-1 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span>Rischio (Chaos)</span>
+                      <span className="font-bold">{Math.round(pick.chaos)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Tipo</span>
+                      <span className="font-bold">{pick.kind}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Best prob</span>
+                      <span className="font-bold">{Math.round(pick.bestProb * 100)}%</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
+                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">Azione</div>
+                  <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+                    Apri “Perché?” per Decision Gate, EV, Drift e Simili.
+                  </div>
+                  <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-bold dark:bg-zinc-950/20">
+                    Dettagli →
+                  </div>
+                </div>
+              </div>
+            </button>
           )
         })}
+
+        <div className="bento-col-4 card-wow">
+          <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Quick stats</div>
+          <div className="mt-2 grid gap-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-600 dark:text-zinc-300">Totale pick</span>
+              <span className="font-extrabold text-zinc-900 dark:text-zinc-50">{allPicks.length}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-600 dark:text-zinc-300">Featured</span>
+              <span className="font-extrabold text-zinc-900 dark:text-zinc-50">{featured.length}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-600 dark:text-zinc-300">Modalità</span>
+              <span className="font-extrabold text-zinc-900 dark:text-zinc-50">{mode}</span>
+            </div>
+            <div className="h-px bg-white/10" />
+            <div className="text-[11px] text-zinc-600 dark:text-zinc-300">
+              Sotto trovi l’elenco per campionato (compatto).
+            </div>
+          </div>
+        </div>
+
+        {rest.map(({ championship, label, pick }) => {
+          const m = pick.match
+          const cb = chaosBadge(pick.chaos)
+          const kindTone = pick.kind === "LOW" || pick.kind === "PLAY" ? "green" : "red"
+          return (
+            <button
+              key={`${championship}-${String(m.match_id)}`}
+              type="button"
+              onClick={() => onOpenMatch(String(m.match_id))}
+              className="bento-col-12 card-wow text-left p-4"
+              title="Click per aprire i dettagli (Explain)"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{label}</div>
+                  <div className="text-sm font-extrabold text-zinc-900 dark:text-zinc-50">
+                    {m.home_team} <span className="text-zinc-400">vs</span> {m.away_team}
+                  </div>
+                  <div className="text-[11px] text-zinc-600 dark:text-zinc-300">{fmtKickoff(m.kickoff_unix ?? null)}</div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${pillClass(kindTone)}`}>
+                    {pick.kind === "PLAY" ? "PLAY" : pick.kind}
+                  </span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${pillClass(cb.tone)}`}>
+                    {cb.label}
+                  </span>
+                  {pick.upset ? (
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${pillClass("red")}`}>UPSET</span>
+                  ) : null}
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${pillClass("zinc")}`}>
+                    Best {Math.round(pick.bestProb * 100)}%
+                  </span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${pillClass("zinc")}`}>
+                    Conf {Math.round(clamp01(Number(m.confidence ?? 0)) * 100)}%
+                  </span>
+                  <FragilityBadge fragility={fragilityFromExplain(m.explain)} />
+                </div>
+              </div>
+
+              <div className="mt-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+                {pick.why?.length ? (
+                  <span title={pick.why.join(", ")}>
+                    Perché: {pick.why.slice(0, 3).join(", ")}
+                    {pick.why.length >= 4 ? "…" : ""}
+                  </span>
+                ) : (
+                  <span>Perché: segnali standard</span>
+                )}
+              </div>
+            </button>
+          )
+        })}
+
+        <details className="bento-col-12 rounded-3xl border border-white/10 bg-white/40 p-4 text-sm dark:bg-zinc-950/15">
+          <summary className="cursor-pointer select-none text-xs font-bold text-zinc-800 dark:text-zinc-100">
+            Elenco per campionato (compatto)
+          </summary>
+          <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
+            {grouped.map(({ championship, picks }) => {
+              const label = champLabels?.[championship] ?? championship
+              return (
+                <div
+                  key={championship}
+                  className="rounded-3xl border border-zinc-200/70 bg-white/55 p-3 dark:border-zinc-800/70 dark:bg-zinc-950/25"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">{label}</div>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(picks.length ? "green" : "zinc")}`}>
+                      {picks.length ? `${picks.length} pick` : "n/d"}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 space-y-2">
+                    {picks.map((p) => {
+                      const m = p.match
+                      const cb = chaosBadge(p.chaos)
+                      const kindTone = p.kind === "LOW" || p.kind === "PLAY" ? "green" : "red"
+                      return (
+                        <button
+                          key={m.match_id}
+                          type="button"
+                          onClick={() => onOpenMatch(String(m.match_id))}
+                          className="w-full text-left rounded-2xl border border-zinc-200/70 bg-white/70 px-3 py-2 hover:bg-white dark:border-zinc-800/70 dark:bg-zinc-950/25"
+                          title="Click per aprire i dettagli (Explain)"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-50">
+                                {m.home_team} <span className="text-zinc-400">vs</span> {m.away_team}
+                              </div>
+                              <div className="text-[11px] text-zinc-600 dark:text-zinc-300">{fmtKickoff(m.kickoff_unix ?? null)}</div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(kindTone)}`}>
+                                {p.kind === "PLAY" ? "PLAY" : p.kind}
+                              </span>
+
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass(cb.tone)}`}>
+                                {cb.label}
+                              </span>
+
+                              {p.upset ? (
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass("red")}`}>
+                                  UPSET
+                                </span>
+                              ) : null}
+
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass("zinc")}`}>
+                                Best {Math.round(p.bestProb * 100)}%
+                              </span>
+
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${pillClass("zinc")}`}>
+                                Conf {Math.round(clamp01(Number(m.confidence ?? 0)) * 100)}%
+                              </span>
+
+                              <FragilityBadge fragility={fragilityFromExplain(m.explain)} />
+                            </div>
+                          </div>
+
+                          <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+                            {p.why?.length ? (
+                              <span title={p.why.join(", ")}>
+                                Perché: {p.why.join(", ")}
+                                {p.why.length >= 4 ? "…" : ""}
+                              </span>
+                            ) : (
+                              <span>Perché: segnali standard</span>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </details>
       </div>
     </Card>
   )

@@ -22,6 +22,7 @@ import {
 } from "@/components/api/client"
 import { StickyFiltersBar } from "@/components/layout/StickyFiltersBar"
 import { BestCountsHeader } from "@/components/widgets/BestCountsHeader"
+import { BentoKpiHeader } from "@/components/widgets/BentoKpiHeader"
 import { Card } from "@/components/widgets/Card"
 import { BestFirstToggle } from "@/components/widgets/BestFirstToggle"
 import { ChaosInsights } from "@/components/widgets/ChaosInsights"
@@ -2470,25 +2471,32 @@ export function StatisticalPredictionsDashboard() {
             </div>
 
             {pronosticiView === "play" ? (
+            <div className="mt-4 space-y-4">
+              <BentoKpiHeader matches={toPlay as any} />
               <PronosticiPicks
                 matches={toPlay}
                 mode="play"
                 champLabels={CHAMP_LABELS}
                 onOpenMatch={(id) => openExplainModal(String(id))}
               />
+            </div>
             ) : null}
 
             {pronosticiView === "recover" ? (
+            <div className="mt-4 space-y-4">
+              <BentoKpiHeader matches={toPlay as any} />
               <PronosticiPicks
                 matches={toPlay}
                 mode="recover"
                 champLabels={CHAMP_LABELS}
                 onOpenMatch={(id) => openExplainModal(String(id))}
               />
+            </div>
             ) : null}
 
             {pronosticiView === "all" ? (
-            <div className="mt-4 space-y-3">
+            <div className="mt-4 space-y-4">
+              <BentoKpiHeader matches={nextMatchesData.items as any} bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} />
               <BestCountsHeader bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} showHint />
               {nextMatchesData.items.length ? (
                 nextMatchesData.items.map((m) => {

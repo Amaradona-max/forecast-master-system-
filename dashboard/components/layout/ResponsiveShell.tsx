@@ -78,7 +78,7 @@ export function ResponsiveShell() {
           }`}
         >
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-          <div className="text-sm font-bold text-gradient truncate">{collapsed ? "FM" : "Forecast Master"}</div>
+          <div className="text-sm font-bold text-gradient-wow truncate">{collapsed ? "FM" : "Forecast Master"}</div>
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="text-xs text-zinc-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
@@ -97,7 +97,7 @@ export function ResponsiveShell() {
                 className={[
                   "group w-full rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-all duration-200",
                   activeItem
-                    ? "bg-gradient-to-br from-emerald-500/15 to-emerald-600/10 text-emerald-700 dark:text-emerald-300 shadow-soft"
+                    ? "bg-gradient-to-br from-indigo-500/15 via-cyan-500/10 to-fuchsia-500/10 text-zinc-900 dark:text-zinc-50 shadow-soft ring-1 ring-white/10"
                     : "text-zinc-700 hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
                 ].join(" ")}
               >
