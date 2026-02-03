@@ -1173,6 +1173,7 @@ export function StatisticalPredictionsDashboard() {
 
   useEffect(() => {
     let active = true
+    const toError = (e: unknown) => String((e as Error)?.message ?? e)
     async function load() {
       if (!pageVisible) return
       const fetchBacktestMetrics = async () => {
@@ -1189,7 +1190,15 @@ export function StatisticalPredictionsDashboard() {
         return (await res.json()) as BacktestTrendsResponse
       }
 
-      const [metricsResult, trendsResult] = await Promise.allSettled([fetchBacktestMetrics(), fetchBacktestTrends()])
+      const fetchTeams = async () => fetchTeamsToPlay()
+      const fetchValue = async () => fetchValuePicks({ limit: 12, min_value_index: 8 })
+
+      const [metricsResult, trendsResult, teamsResult, valueResult] = await Promise.allSettled([
+        fetchBacktestMetrics(),
+        fetchBacktestTrends(),
+        fetchTeams(),
+        fetchValue()
+      ])
       if (!active) return
 
       if (metricsResult.status === "fulfilled") {
@@ -1207,6 +1216,21 @@ export function StatisticalPredictionsDashboard() {
       } else {
         setLeagueTrends({})
         setBacktestTrends(null)
+      }
+
+      if (teamsResult.status === "fulfilled") {
+        setTeamsToPlay(teamsResult.value)
+        setTeamsToPlayError(null)
+      } else {
+        setTeamsToPlayError(toError(teamsResult.reason))
+      }
+
+      if (valueResult.status === "fulfilled") {
+        setValuePicks(valueResult.value)
+        setValuePicksError(null)
+      } else {
+        setValuePicksError(toError(valueResult.reason))
+        setValuePicks(null)
       }
     }
     load()
@@ -1235,50 +1259,6 @@ export function StatisticalPredictionsDashboard() {
     }
   }, [selectedChamp])
 
-  useEffect(() => {
-    let active = true
-    async function loadTeamsToPlay() {
-      if (!pageVisible) return
-      try {
-        const res = await fetchTeamsToPlay()
-        if (!active) return
-        setTeamsToPlay(res)
-        setTeamsToPlayError(null)
-      } catch (e) {
-        if (!active) return
-        setTeamsToPlayError(String((e as Error)?.message ?? e))
-      }
-    }
-    loadTeamsToPlay()
-    const t = window.setInterval(loadTeamsToPlay, 60_000)
-    return () => {
-      active = false
-      window.clearInterval(t)
-    }
-  }, [pageVisible])
-
-  useEffect(() => {
-    let active = true
-    async function loadValuePicks() {
-      if (!pageVisible) return
-      try {
-        const res = await fetchValuePicks({ limit: 12, min_value_index: 8 })
-        if (!active) return
-        setValuePicks(res)
-        setValuePicksError(null)
-      } catch (e) {
-        if (!active) return
-        setValuePicksError(String((e as Error)?.message ?? e))
-        setValuePicks(null)
-      }
-    }
-    loadValuePicks()
-    const t = window.setInterval(loadValuePicks, 60_000)
-    return () => {
-      active = false
-      window.clearInterval(t)
-    }
-  }, [pageVisible])
 
   useEffect(() => {
     let active = true
@@ -2472,7 +2452,7 @@ export function StatisticalPredictionsDashboard() {
 
             {pronosticiView === "play" ? (
             <div className="mt-4 space-y-4">
-              <BentoKpiHeader matches={toPlay as any} />
+              <BentoKpiHeader matches={toPlay} />
               <PronosticiPicks
                 matches={toPlay}
                 mode="play"
@@ -2484,7 +2464,7 @@ export function StatisticalPredictionsDashboard() {
 
             {pronosticiView === "recover" ? (
             <div className="mt-4 space-y-4">
-              <BentoKpiHeader matches={toPlay as any} />
+              <BentoKpiHeader matches={toPlay} />
               <PronosticiPicks
                 matches={toPlay}
                 mode="recover"
@@ -2496,7 +2476,7 @@ export function StatisticalPredictionsDashboard() {
 
             {pronosticiView === "all" ? (
             <div className="mt-4 space-y-4">
-              <BentoKpiHeader matches={nextMatchesData.items as any} bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} />
+              <BentoKpiHeader matches={nextMatchesData.items} bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} />
               <BestCountsHeader bestCount={nextMatchesData.bestCount} topCount={nextMatchesData.topCount} showHint />
               {nextMatchesData.items.length ? (
                 nextMatchesData.items.map((m) => {
@@ -2798,7 +2778,16 @@ export function StatisticalPredictionsDashboard() {
                                     <div>
                                       <div className="text-xs font-bold text-zinc-700 dark:text-zinc-200">Perché (Explain)</div>
                                       <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
-                                        {matchExplainLoading ? "Caricamento…" : matchExplainError ? `Errore: ${matchExplainError}` : "Dettagli generati dal motore explainability."}
+                                        {matchExplainLoading ? (
+                                          <div className="space-y-1.5">
+                                            <SkeletonBlock className="h-3 w-40" />
+                                            <SkeletonBlock className="h-3 w-56" />
+                                          </div>
+                                        ) : matchExplainError ? (
+                                          `Errore: ${matchExplainError}`
+                                        ) : (
+                                          "Dettagli generati dal motore explainability."
+                                        )}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2">
@@ -2859,7 +2848,14 @@ export function StatisticalPredictionsDashboard() {
                                   </div>
 
                                   {multiMarketLoading ? (
-                                    <div>Caricamento…</div>
+                                    <div className="space-y-2">
+                                      <div className="flex flex-wrap gap-2">
+                                        <SkeletonBlock className="h-6 w-20 rounded-full" />
+                                        <SkeletonBlock className="h-6 w-24 rounded-full" />
+                                        <SkeletonBlock className="h-6 w-16 rounded-full" />
+                                      </div>
+                                      <SkeletonBlock className="h-10 w-full rounded-xl" />
+                                    </div>
                                   ) : multiMarketError && !marketOk ? (
                                     <div>{multiMarketError}</div>
                                   ) : !marketOk ? (
@@ -2926,7 +2922,12 @@ export function StatisticalPredictionsDashboard() {
 
                                 <div>
                                   {matchExplainLoading ? (
-                                    <div>Caricamento…</div>
+                                    <div className="space-y-2">
+                                      <SkeletonBlock className="h-4 w-40" />
+                                      <SkeletonBlock className="h-3 w-full" />
+                                      <SkeletonBlock className="h-3 w-11/12" />
+                                      <SkeletonBlock className="h-3 w-10/12" />
+                                    </div>
                                   ) : matchExplainError ? (
                                     <div>{matchExplainError}</div>
                                   ) : !matchExplain ? (
@@ -3151,7 +3152,12 @@ export function StatisticalPredictionsDashboard() {
                       {open ? (
                         <div className="mt-3 rounded-xl border border-white/10 bg-white/10 p-3 text-xs text-zinc-700 dark:bg-zinc-950/20 dark:text-zinc-200">
                           {teamExplainLoading ? (
-                            <div>Caricamento…</div>
+                            <div className="space-y-2">
+                              <SkeletonBlock className="h-4 w-36" />
+                              <SkeletonBlock className="h-3 w-full" />
+                              <SkeletonBlock className="h-3 w-10/12" />
+                              <SkeletonBlock className="h-3 w-9/12" />
+                            </div>
                           ) : teamExplainError ? (
                             <div>{teamExplainError}</div>
                           ) : !explainOk ? (
@@ -3600,4 +3606,8 @@ function Gauge({ value }: { value: number }) {
       </div>
     </div>
   )
+}
+
+function SkeletonBlock({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-2xl bg-white/20 dark:bg-white/10 ${className}`} />
 }

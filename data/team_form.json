@@ -1,0 +1,455 @@
+{
+  "generated_at_utc": "2026-02-03T17:12:39.437191+00:00",
+  "asof_utc": "2026-02-03T17:12:36.921363+00:00",
+  "generated_at_unix": 1770138759.437217,
+  "meta": {
+    "model": "team_form_last5_v1",
+    "source": "football_data",
+    "window": 5
+  },
+  "championships": {
+    "serie_a": {
+      "teams": {
+        "Genoa CFC": {
+          "pts_last5": 8,
+          "gf_last5": 9,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "US Lecce": {
+          "pts_last5": 1,
+          "gf_last5": 1,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "US Sassuolo Calcio": {
+          "pts_last5": 6,
+          "gf_last5": 4,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "SSC Napoli": {
+          "pts_last5": 8,
+          "gf_last5": 5,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "AC Milan": {
+          "pts_last5": 9,
+          "gf_last5": 7,
+          "ga_last5": 4,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "US Cremonese": {
+          "pts_last5": 2,
+          "gf_last5": 2,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "AS Roma": {
+          "pts_last5": 10,
+          "gf_last5": 7,
+          "ga_last5": 2,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Bologna FC 1909": {
+          "pts_last5": 4,
+          "gf_last5": 7,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Cagliari Calcio": {
+          "pts_last5": 10,
+          "gf_last5": 9,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "ACF Fiorentina": {
+          "pts_last5": 5,
+          "gf_last5": 7,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Como 1907": {
+          "pts_last5": 8,
+          "gf_last5": 11,
+          "ga_last5": 4,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "SS Lazio": {
+          "pts_last5": 8,
+          "gf_last5": 6,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Atalanta BC": {
+          "pts_last5": 11,
+          "gf_last5": 9,
+          "ga_last5": 1,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "AC Pisa 1909": {
+          "pts_last5": 2,
+          "gf_last5": 6,
+          "ga_last5": 15,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Juventus FC": {
+          "pts_last5": 12,
+          "gf_last5": 15,
+          "ga_last5": 2,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Parma Calcio 1913": {
+          "pts_last5": 5,
+          "gf_last5": 3,
+          "ga_last5": 9,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Udinese Calcio": {
+          "pts_last5": 10,
+          "gf_last5": 8,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Hellas Verona FC": {
+          "pts_last5": 1,
+          "gf_last5": 3,
+          "ga_last5": 11,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "FC Internazionale Milano": {
+          "pts_last5": 13,
+          "gf_last5": 12,
+          "ga_last5": 4,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Torino FC": {
+          "pts_last5": 3,
+          "gf_last5": 2,
+          "ga_last5": 12,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        }
+      },
+      "asof_unix": 1770138756.9213629,
+      "n_matches_used": 229
+    },
+    "premier_league": {
+      "teams": {
+        "Liverpool FC": {
+          "pts_last5": 6,
+          "gf_last5": 9,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "AFC Bournemouth": {
+          "pts_last5": 10,
+          "gf_last5": 11,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Aston Villa FC": {
+          "pts_last5": 7,
+          "gf_last5": 5,
+          "ga_last5": 3,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Newcastle United FC": {
+          "pts_last5": 7,
+          "gf_last5": 7,
+          "ga_last5": 9,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Brighton & Hove Albion FC": {
+          "pts_last5": 6,
+          "gf_last5": 6,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Fulham FC": {
+          "pts_last5": 7,
+          "gf_last5": 8,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Sunderland AFC": {
+          "pts_last5": 7,
+          "gf_last5": 7,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "West Ham United FC": {
+          "pts_last5": 6,
+          "gf_last5": 8,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Tottenham Hotspur FC": {
+          "pts_last5": 3,
+          "gf_last5": 8,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Burnley FC": {
+          "pts_last5": 3,
+          "gf_last5": 5,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Wolverhampton Wanderers FC": {
+          "pts_last5": 5,
+          "gf_last5": 4,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Manchester City FC": {
+          "pts_last5": 6,
+          "gf_last5": 6,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Nottingham Forest FC": {
+          "pts_last5": 8,
+          "gf_last5": 6,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Brentford FC": {
+          "pts_last5": 9,
+          "gf_last5": 8,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Chelsea FC": {
+          "pts_last5": 10,
+          "gf_last5": 10,
+          "ga_last5": 6,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Crystal Palace FC": {
+          "pts_last5": 2,
+          "gf_last5": 3,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Manchester United FC": {
+          "pts_last5": 11,
+          "gf_last5": 11,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Arsenal FC": {
+          "pts_last5": 8,
+          "gf_last5": 9,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Leeds United FC": {
+          "pts_last5": 5,
+          "gf_last5": 6,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Everton FC": {
+          "pts_last5": 6,
+          "gf_last5": 6,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        }
+      },
+      "asof_unix": 1770138756.9213629,
+      "n_matches_used": 240
+    },
+    "la_liga": {
+      "teams": {
+        "Girona FC": {
+          "pts_last5": 10,
+          "gf_last5": 6,
+          "ga_last5": 3,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Rayo Vallecano de Madrid": {
+          "pts_last5": 4,
+          "gf_last5": 5,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Villarreal CF": {
+          "pts_last5": 7,
+          "gf_last5": 8,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Real Oviedo": {
+          "pts_last5": 5,
+          "gf_last5": 5,
+          "ga_last5": 8,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "RCD Mallorca": {
+          "pts_last5": 6,
+          "gf_last5": 9,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "FC Barcelona": {
+          "pts_last5": 12,
+          "gf_last5": 11,
+          "ga_last5": 3,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Deportivo Alavés": {
+          "pts_last5": 7,
+          "gf_last5": 6,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Levante UD": {
+          "pts_last5": 8,
+          "gf_last5": 7,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Valencia CF": {
+          "pts_last5": 7,
+          "gf_last5": 7,
+          "ga_last5": 9,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Real Sociedad de Fútbol": {
+          "pts_last5": 11,
+          "gf_last5": 9,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "RC Celta de Vigo": {
+          "pts_last5": 10,
+          "gf_last5": 9,
+          "ga_last5": 4,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Getafe CF": {
+          "pts_last5": 3,
+          "gf_last5": 3,
+          "ga_last5": 5,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Athletic Club": {
+          "pts_last5": 2,
+          "gf_last5": 6,
+          "ga_last5": 9,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Sevilla FC": {
+          "pts_last5": 4,
+          "gf_last5": 5,
+          "ga_last5": 11,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "RCD Espanyol de Barcelona": {
+          "pts_last5": 1,
+          "gf_last5": 4,
+          "ga_last5": 10,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Club Atlético de Madrid": {
+          "pts_last5": 11,
+          "gf_last5": 8,
+          "ga_last5": 1,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Elche CF": {
+          "pts_last5": 2,
+          "gf_last5": 7,
+          "ga_last5": 12,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Real Betis Balompié": {
+          "pts_last5": 7,
+          "gf_last5": 7,
+          "ga_last5": 9,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "Real Madrid CF": {
+          "pts_last5": 15,
+          "gf_last5": 13,
+          "ga_last5": 2,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        },
+        "CA Osasuna": {
+          "pts_last5": 8,
+          "gf_last5": 9,
+          "ga_last5": 7,
+          "n_used": 5,
+          "asof_unix": 1770138756.9213629
+        }
+      },
+      "asof_unix": 1770138756.9213629,
+      "n_matches_used": 219
+    },
+    "bundesliga": {
+      "teams": {},
+      "asof_unix": 1770138756.9213629,
+      "n_matches_used": 0
+    }
+  }
+}

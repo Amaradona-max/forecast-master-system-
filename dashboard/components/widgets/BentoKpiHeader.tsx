@@ -3,16 +3,21 @@
 import { useMemo } from "react"
 import { Card } from "@/components/widgets/Card"
 
-type AnyMatch = Record<string, unknown>
+type ExplainPayload = {
+  decision_gate?: { confidence_tier?: unknown; warnings?: unknown }
+  ev?: { best?: { ev?: unknown } }
+  similar_reliability_pct?: unknown
+  chaos?: { index?: unknown }
+}
 
 function safeNum(x: unknown): number | null {
   const n = Number(x)
   return Number.isFinite(n) ? n : null
 }
 
-function getExplain(m: AnyMatch): Record<string, unknown> {
-  const e = (m as any)?.explain
-  return e && typeof e === "object" ? (e as Record<string, unknown>) : {}
+function getExplain(m: unknown): ExplainPayload {
+  const e = (m as { explain?: unknown } | null | undefined)?.explain
+  return e && typeof e === "object" ? (e as ExplainPayload) : {}
 }
 
 export function BentoKpiHeader({
@@ -20,7 +25,7 @@ export function BentoKpiHeader({
   bestCount,
   topCount
 }: {
-  matches: AnyMatch[]
+  matches: unknown[]
   bestCount?: number
   topCount?: number
 }) {
@@ -36,25 +41,25 @@ export function BentoKpiHeader({
 
     for (const m of matches || []) {
       const ex = getExplain(m)
-      const dg = (ex as any)?.decision_gate
+      const dg = ex.decision_gate
       const tier = dg?.confidence_tier ? String(dg.confidence_tier) : null
       if (tier === "S") tierS++
       if (tier === "A") tierA++
 
-      const ev = (ex as any)?.ev?.best?.ev
+      const ev = ex.ev?.best?.ev
       const evn = safeNum(ev)
       if (evn !== null && evn > 0) evPos++
 
       const warns = dg?.warnings
       if (Array.isArray(warns) && warns.some((w) => /drift/i.test(String(w)))) driftFlags++
 
-      const sim = safeNum((ex as any)?.similar_reliability_pct)
+      const sim = safeNum(ex.similar_reliability_pct)
       if (sim !== null && sim > 0) {
         simSum += sim
         simN++
       }
 
-      const chaosIdx = safeNum((ex as any)?.chaos?.index)
+      const chaosIdx = safeNum(ex.chaos?.index)
       if (chaosIdx !== null) {
         chaosSum += chaosIdx
         chaosN++
