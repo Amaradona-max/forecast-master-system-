@@ -34,19 +34,19 @@ export const NextMatchItem = React.memo(function NextMatchItem({
       key={matchKey}
       className={`rounded-2xl border border-white/10 bg-white/10 p-4 shadow-sm backdrop-blur-md dark:bg-zinc-950/25 ${bestCls}`}
     >
-      <header className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
+      <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-zinc-500 dark:text-zinc-400">
             Match
           </div>
           <div className="mt-1 text-base font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
-            <span className="break-words">{m.home_team}</span>
+            <span>{m.home_team}</span>
             <span className="mx-1 text-zinc-400 dark:text-zinc-500">vs</span>
-            <span className="break-words">{m.away_team}</span>
+            <span>{m.away_team}</span>
           </div>
         </div>
 
-        <div className="flex items-start justify-between gap-2 sm:justify-end">
+        <div className="flex flex-wrap items-start justify-between gap-2 md:justify-end">
           <div className="min-w-0">{titleRight}</div>
           {isBest ? <BestPickBadge /> : null}
           <HighConfidenceBadge prediction={m} />
